@@ -59,3 +59,10 @@ Vedi messaggio in chat.
 - `TimelineItem` ha `GetSourceStartFrame/EndFrame`, `AddTake/SelectTakeByIndex` (utile per i take alternativi).
 - Piano A confermato in via di principio: niente Whisper, testo dalla trascrizione nativa.
 - Attenzione: clip con Start TC 01:00:00:00 a 25 fps (`Start`=0, `End`=7762); la timeline parte dal frame 90000. Va chiarito se i marker usano frame relativi alla clip o assoluti (probe 2).
+
+## 9. Esito probe 2 (confermato su Resolve Studio 21.2.0.6)
+- `GetTranscription()` → dict `{language, segments[{start,end,words[{start,end,text}],text,speaker}]}` con timecode assoluti; `GetClipProperty("Transcription")` dà il testo piatto; stato in `Transcription Status` e `GetTranscribeAudioStatus()`. **Piano A confermato: nessun Whisper necessario.**
+- Marker di clip e timeline: frame relativi all'inizio (clip o timeline); `customData` funziona (ricerca/aggiornamento/cancellazione per customData).
+- `AppendToTimeline` con in/out: source start/end = frame relativi alla clip, fine esclusa; piazza alla `GetStartFrame()` della timeline.
+- Costanti export presenti: FCPXML 1.9/1.10, EDL, OTIO, AAF, CSV/TAB. Nessun export SRT diretto.
+- Dati del formato e contratti: `docs/CONTRACTS.md`.
