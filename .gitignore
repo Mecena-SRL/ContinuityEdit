@@ -4,3 +4,5 @@ node_modules/
 __pycache__/
 .claude/worktrees/
 dist/
+assets/icon/AppIcon.icns
+assets/icon/AppIcon.iconset/

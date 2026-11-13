@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="it"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>ContinuityEdit - Guida utente</title>
+<style>
+:root{color-scheme:light dark;--bg:#fff;--fg:#1c1f26;--code:#eef0f3}
+@media (prefers-color-scheme:dark){:root{--bg:#14171d;--fg:#e8e6df;--code:#232833}}
+body{background:var(--bg);color:var(--fg);font:15px/1.55 -apple-system,system-ui,sans-serif;max-width:46rem;margin:0 auto;padding:1.5rem 1rem}
+code{background:var(--code);padding:.1em .3em;border-radius:4px}
+pre{background:var(--code);padding:.8rem;border-radius:6px;overflow-x:auto}pre code{padding:0}
+</style></head><body>
+<h1>ContinuityEdit — Guida utente (v0.0.1)</h1>
+<p>ContinuityEdit e' un plugin per <strong>DaVinci Resolve Studio</strong> (macOS) che collega la sceneggiatura alle clip girate, in stile ScriptSync di Avid: per ogni riga di copione mostra quali take la coprono.</p>
+<h2>Installazione dal .dmg</h2>
+<ol>
+<li>Apri <code>ContinuityEdit-0.0.1.dmg</code>.</li>
+<li>L'app <strong>Installa ContinuityEdit</strong> non e' firmata: al primo avvio fai <strong>tasto destro &gt; Apri</strong>, poi conferma <strong>Apri</strong> nel dialogo di macOS.</li>
+<li>Se macOS la blocca comunque, togli la quarantena da Terminale (adatta il percorso se hai copiato l'app altrove):</li>
+<pre><code>
+sudo xattr -dr com.apple.quarantine "/Volumes/ContinuityEdit 0.0.1/Installa ContinuityEdit.app"
+</code></pre>
+<li>Inserisci la password di amministratore quando richiesta. L'installer copia il plugin in</li>
+<p><code>/Library/Application Support/Blackmagic Design/DaVinci Resolve/Workflow Integration Plugins/</code> e prende da Resolve il modulo <code>WorkflowIntegration.node</code> (appartiene a Blackmagic Design e non e' incluso nel .dmg).</p>
+<li>Riavvia DaVinci Resolve Studio.</li>
+</ol>
+<p>Requisiti: macOS, DaVinci Resolve <strong>Studio</strong> installato per intero (con la cartella Developer).</p>
+<p>Se Resolve non carica il modulo di Blackmagic, togli la quarantena al plugin:</p>
+<pre><code>
+sudo xattr -dr com.apple.quarantine "/Library/Application Support/Blackmagic Design/DaVinci Resolve/Workflow Integration Plugins/com.continuityedit.plugin"
+</code></pre>
+<h2>PRIMA di usare ContinuityEdit</h2>
+<ol>
+<li><strong>Sincronizza e trascrivi le clip in Resolve.</strong> Metti a sync audio e video, poi su ogni clip: tasto destro &gt; <strong>Transcribe Audio</strong>. Crea la timeline.</li>
+<li><strong>Organizza il Media Pool in cartelle per scena</strong> (una cartella per scena, con dentro i take).</li>
+<li><strong>Apri una o piu' cartelle di scena</strong> nel Media Pool.</li>
+<li><strong>Apri una timeline.</strong></li>
+<li>Vai su <strong>Workspace &gt; Workflow Integrations &gt; ContinuityEdit</strong>.</li>
+<li><strong>Importa la sceneggiatura</strong> in formato FDX (Final Draft) o PDF.</li>
+</ol>
+<p>Poi aggiungi i take, lancia la sincronizzazione automatica e controlla la copertura per riga: le barre colorate mostrano quali take coprono ogni battuta.</p>
+<h2>Limiti noti (v0.0.1)</h2>
+<ul>
+<li>Nessun controllo del visore sorgente di Resolve.</li>
+<li>Nessuna commutazione multicam live.</li>
+<li>Il PDF dipende dalla qualita' del testo estratto: se possibile preferisci l'FDX.</li>
+<li>Alcune azioni sulla API di Resolve sono da verificare sul campo (anteprima riga, assemblaggio timeline).</li>
+</ul>
+<h2>Disinstallazione</h2>
+<p>Chiudi Resolve ed elimina la cartella del plugin da Terminale:</p>
+<pre><code>
+sudo rm -rf "/Library/Application Support/Blackmagic Design/DaVinci Resolve/Workflow Integration Plugins/com.continuityedit.plugin"
+</code></pre>
+<p>Se hai il codice sorgente: <code>scripts/install-mac.sh --uninstall</code>. I salvataggi dei progetti (<code>.ce.json</code>) restano nella cartella dati del plugin.</p>
+<h2>Risoluzione problemi</h2>
+<ul>
+<li><strong>Il plugin non compare nel menu</strong>: riavvia Resolve; verifica di avere la versione Studio; controlla che la cartella del plugin esista (vedi sopra).</li>
+<li><strong>"WorkflowIntegration.node non trovato"</strong>: reinstalla Resolve Studio in modo completo, la cartella Developer deve esistere.</li>
+<li><strong>Il modulo non si carica</strong>: togli la quarantena (comando sopra) e riavvia Resolve.</li>
+<li><strong>L'app installer non si apre</strong>: tasto destro &gt; Apri, oppure usa il comando <code>xattr</code> dell'installazione.</li>
+<li><strong>Nessuna copertura per una clip</strong>: la clip non e' stata trascritta; esegui Transcribe Audio e riprova.</li>
+<li><strong>Diagnostica</strong>: dal plugin esegui la diagnostica; salva <code>~/Desktop/continuityedit_diag.json</code>, utile per segnalare problemi.</li>
+</ul>
+<h2>Licenza</h2>
+<p>GNU GPL v3 o successiva. Vedi <code>LICENSE</code> e <code>NOTICE.md</code>.</p>
+</body></html>
