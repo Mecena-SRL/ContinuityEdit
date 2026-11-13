@@ -9,6 +9,7 @@ import { renderScript } from './panels/script.js';
 import { renderDock } from './panels/dock.js';
 import { renderBoard } from './panels/board.js';
 import { openGuide } from './panels/guide.js';
+import { masterTakeId, cutawayLineIds } from './viewmodel/sequence.js';
 import { buildColumnPlan } from './viewmodel/groups.js';
 import { filterTakeList } from './viewmodel/marks.js';
 import { GUIDE_KEY, shouldShowGuide } from './viewmodel/guide.js';
@@ -60,7 +61,11 @@ function derive() {
   const allTakes = view.takes.map((t) => ({ ...(project?.takes?.find((p) => p.id === t.id) || {}), ...t }));
   const plan = buildColumnPlan(filterTakeList(allTakes, { rating: S.ratingFilter, grades: S.gradeFilter }));
   const layout = buildCoverageLayout(visible, plan.ordered, view.coverage, project?.selection || {}, view.bestTake || {});
-  S.d = { byId, visible, unc, layout, plan, allTakes, takes: plan.ordered, matches: searchMatches(view.lines, S.query) };
+  const sitems = project?.sequence?.items || [];
+  const cutMap = new Map();
+  for (const it of sitems) if (it.role === 'cutaway') cutawayLineIds(view.lines, it).forEach((id) => cutMap.set(`${it.takeId}|${id}`, it));
+  const seq = { items: sitems, master: masterTakeId(sitems), cutMap, any: sitems.length > 0 };
+  S.d = { seq, byId, visible, unc, layout, plan, allTakes, takes: plan.ordered, matches: searchMatches(view.lines, S.query) };
 }
 
 // ---------- render ----------

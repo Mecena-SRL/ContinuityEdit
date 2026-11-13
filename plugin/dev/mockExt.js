@@ -79,7 +79,21 @@ export function createExt({ getProject, emit, opts = {} }) {
     return { errors };
   };
 
+  const synth = async ({ takeId, frame, fps, size = 320 }) => {
+    await delay(opts.synthDelay ?? 60);
+    if (opts.undecodable) throw new Error('codec non decodificabile');
+    const c = document.createElement('canvas'); c.width = size; c.height = Math.round(size * 9 / 16);
+    const g = c.getContext('2d'); const hue = (takeId.charCodeAt(takeId.length - 1) * 70 + frame * 0.4) % 360;
+    const grad = g.createLinearGradient(0, 0, c.width, c.height); grad.addColorStop(0, `hsl(${hue},45%,30%)`); grad.addColorStop(1, `hsl(${(hue + 60) % 360},40%,16%)`);
+    g.fillStyle = grad; g.fillRect(0, 0, c.width, c.height);
+    g.fillStyle = `hsla(${hue},60%,70%,.5)`; g.beginPath(); g.arc(c.width * (0.2 + (frame % 300) / 400), c.height * 0.5, c.height * 0.2, 0, 7); g.fill();
+    g.fillStyle = '#fff'; g.font = `${Math.round(size / 14)}px ui-monospace, monospace`; g.fillText(`${takeId} · ${placeholderTc(frame, fps)}`, 8, c.height - 8);
+    return c.toDataURL('image/jpeg', 0.7);
+  };
+  const placeholderTc = (f, fps) => { const n = Math.round(fps) || 25; const sec = Math.floor(f / n); const p = (v) => String(v).padStart(2, '0'); return `${p(Math.floor(sec / 60))}:${p(sec % 60)}:${p(f % n)}`; };
+
   const api = {
+    __synthFrame: synth,
     async listBins() { await delay(); return BINS.map((b) => ({ name: b.name, path: b.path, clipCount: b.clips.length })); },
     async loadBins(names) {
       await delay(150);
@@ -199,14 +213,17 @@ export function createExt({ getProject, emit, opts = {} }) {
       },
     },
 
-    async getClipMediaPath(takeId) { await delay(); return { path: `/esempio/media/${takeId}.mov`, codec: opts.codec || 'ProRes 422', fps: 25 }; },
+    async getClipMediaPath(takeId) { await delay(); return { path: `/esempio/media/${takeId}.mov`, proxyPath: null, codec: opts.codec || 'H.264', fps: 25, startTcFrames: 90000 }; },
     board: {
-      async captureStill({ takeId, frame }) {
-        await delay(120);
-        if (opts.stillVia === 'none') return { ok: false, via: 'none', reason: 'ExportFrame non disponibile in questa versione.' };
-        const label = `${takeId} · frame ${frame}`;
-        return { ok: true, via: 'exportFrame', path: placeholder(label, ['#4fa3ff', '#ff9f43', '#4cd38a', '#e56bd0'][frame % 4]) };
+      // Still = (takeId, frame) + marker Resolve; nessun file. La miniatura la ricava il renderer dal video.
+      async addStill({ takeId, frame, lineId }) {
+        return mut(() => {
+          const n = E.board.items.length;
+          const item = { id: nid('B'), type: 'still', takeId, frame, x: 40 + (n % 4) * 240, y: 40 + Math.floor(n / 4) * 150, w: 220, h: 124, z: n + 1, caption: '', lineId: lineId || null };
+          E.board.items.push(item); return { ok: true, itemId: item.id, markerWritten: true };
+        });
       },
+      async refreshStillViaResolve() { await delay(200); return { ok: true }; },
       async addItem(it) {
         return mut(() => {
           const i = it.id ? E.board.items.findIndex((x) => x.id === it.id) : -1;
@@ -234,8 +251,8 @@ export function createExt({ getProject, emit, opts = {} }) {
 
   // dati iniziali: lavagna e sequenza di esempio
   E.board.items.push(
-    { id: 'B1', type: 'still', takeId: 'T1', frame: 120, imagePath: placeholder('T1 · frame 120', '#4fa3ff'), x: 40, y: 60, w: 220, h: 124, z: 1, caption: 'Entrata di Livia', lineId: 'L0002' },
-    { id: 'B2', type: 'still', takeId: 'T2', frame: 300, imagePath: placeholder('T2 · frame 300', '#ff9f43'), x: 320, y: 90, w: 220, h: 124, z: 2, caption: 'Primo piano Teo', lineId: null },
+    { id: 'B1', type: 'still', takeId: 'T1', frame: 120, x: 40, y: 60, w: 220, h: 124, z: 1, caption: 'Entrata di Livia', lineId: 'L0002' },
+    { id: 'B2', type: 'still', takeId: 'T2', frame: 300, x: 320, y: 90, w: 220, h: 124, z: 2, caption: 'Primo piano Teo', lineId: null },
     { id: 'B3', type: 'note', x: 180, y: 260, w: 200, h: 90, z: 3, caption: 'Controllare continuità della tazza', color: '#f2d14a', lineId: null },
   );
   E.board.links.push({ from: 'B1', to: 'B2' });

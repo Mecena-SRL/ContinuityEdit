@@ -23,7 +23,7 @@
   <label id="devbar">Playhead simulato (frame) <input id="dev-ph" type="number" value="150"></label>
   <script type="module">
     import { createMockCe } from './mockCe.js';
-    window.ce = createMockCe();
+    window.ce = createMockCe({ undecodable: location.search.includes('undecodable') });
     document.getElementById('dev-ph').addEventListener('input', (e) => { window.ce.__state.playheadFrame = e.target.value === '' ? null : parseInt(e.target.value, 10); });
     await import('../renderer/app.js');
   </script>

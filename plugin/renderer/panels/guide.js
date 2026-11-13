@@ -12,7 +12,7 @@ export function openGuide() {
     h('ol', { class: 'guide-steps' }, GUIDE_STEPS.map((s, i) => h('li', {},
       h('span', { class: 'gnum', 'aria-hidden': 'true' }, i + 1),
       h('div', {}, h('b', {}, s.title), h('p', {}, s.text))))),
-    h('p', { class: 'hint' }, 'Limite di Resolve: non esiste la commutazione live degli angoli multicam. La “Regia” registra i tagli e li manda in timeline.'),
+    h('p', { class: 'hint' }, 'Montaggio grezzo: un take “master” su V1 e le altre camere come cutaway su V2/V3, trascinando le maniglie sulle linee del testo. Resolve non permette la commutazione live degli angoli.'),
     h('div', { class: 'dlg-actions' }, h('button', { class: 'btn btn-primary', type: 'button', autofocus: true, onclick: close }, 'Ho capito')));
   dlg.addEventListener('cancel', (e) => { e.preventDefault(); close(); });
   document.body.append(dlg);

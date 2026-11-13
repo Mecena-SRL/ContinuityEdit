@@ -56,10 +56,10 @@ export function sequenceTab(ctx) {
   const { S, ce } = ctx;
   const items = seqItems(S);
   const master = masterTakeId(items);
-  const lay = layoutSequence(items);
   const total = totalFrames(items);
   const fps = ctx.fpsOf(master || S.activeTakeId) || 25;
   const ppf = total ? Math.min(2, 520 / total) : 1;
+  const lay = layoutSequence(items, ppf);
   const tracks = trackCount(items);
   const sel = items.find((i) => i.id === local.sel) || null;
 

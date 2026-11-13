@@ -2,6 +2,7 @@
 import { h, renderInto, store } from '../dom.js';
 import { multicamGroups, anglesForGroup } from '../viewmodel/groups.js';
 import { ratingLabel } from '../viewmodel/marks.js';
+import { setMasterFor } from './sequence.js';
 import { takeStats } from '../viewmodel/summary.js';
 import { formatDuration } from '../viewmodel/format.js';
 
@@ -169,5 +170,6 @@ function takeCard(ctx, t, st, act) {
         class: 'btn btn-small', type: 'button', 'data-fk': `as-${t.id}`, disabled: !done || S.busy.has('Sync automatico'),
         title: done ? 'Allinea le battute alla trascrizione' : 'Serve prima la trascrizione', onclick: () => act.autoSync(t.id),
       }, 'Sync automatico'),
+      h('button', { class: `btn btn-small${S.d.seq?.master === t.id ? ' btn-on' : ''}`, type: 'button', 'data-fk': `ms-${t.id}`, title: 'Imposta come master (totale su V1)', onclick: () => setMasterFor(ctx, t.id) }, S.d.seq?.master === t.id ? 'Master ✓' : 'Master'),
       h('button', { class: 'btn btn-small btn-ghost-danger', type: 'button', 'data-fk': `rm-${t.id}`, 'aria-label': `Rimuovi ${ctx.takeLabel(t.id)}`, onclick: () => act.remove(t.id) }, 'Rimuovi')));
 }

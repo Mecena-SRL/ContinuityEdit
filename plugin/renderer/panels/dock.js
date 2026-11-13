@@ -5,8 +5,10 @@ import { anchorsForLine, warningsFor, sortedMarkers, edgeLabel, compareTakes } f
 import { sourceLabel, sourceKind } from '../viewmodel/coverage.js';
 import { assemblySummary, skipReasonLabel } from '../viewmodel/summary.js';
 import { sortByScriptOrder } from '../viewmodel/script.js';
+import { sequenceTab } from './sequence.js';
+import { browserTab } from './browser.js';
 
-const TABS = [['anchors', 'Ancore'], ['compare', 'Confronto take'], ['assemble', 'Assembla'], ['notes', 'Note']];
+const TABS = [['anchors', 'Ancore'], ['compare', 'Confronto'], ['sequence', 'Sequenza'], ['browser', 'Browser'], ['assemble', 'Assembla'], ['notes', 'Note']];
 const manual = { frame: '', edge: 'start' }; // stato locale del campo frame manuale
 
 export function renderDock(el, ctx) {
@@ -25,12 +27,14 @@ export function renderDock(el, ctx) {
       if (n != null) { e.preventDefault(); S.tab = TABS[n][0]; ctx.rerender(['dock']); setTimeout(() => tabs.querySelector('[aria-selected=true]')?.focus(), 0); }
     });
   }
-  renderInto(tabs, () => TABS.map(([k, label]) => h('button', {
+  el.classList.toggle('collapsed', !!S.dockCollapsed);
+  renderInto(tabs, () => [...TABS.map(([k, label]) => h('button', {
     class: `tab${S.tab === k ? ' on' : ''}`, role: 'tab', type: 'button', id: `tab-${k}`, 'aria-selected': String(S.tab === k), tabindex: S.tab === k ? '0' : '-1', 'data-fk': `tab-${k}`,
     onclick: () => { S.tab = k; ctx.rerender(['dock']); },
-  }, label, k === 'assemble' && S.sel.length ? h('span', { class: 'tab-count' }, S.sel.length) : null)));
+  }, label, k === 'assemble' && S.sel.length ? h('span', { class: 'tab-count' }, S.sel.length) : null)),
+    h('button', { class: 'tab tab-collapse', type: 'button', tabindex: '-1', 'aria-label': S.dockCollapsed ? 'Espandi pannello' : 'Comprimi pannello', title: S.dockCollapsed ? 'Espandi pannello' : 'Comprimi pannello', onclick: () => { S.dockCollapsed = !S.dockCollapsed; ctx.rerender(['dock']); } }, S.dockCollapsed ? '▴' : '▾')]);
   body.setAttribute('aria-labelledby', `tab-${S.tab}`);
-  renderInto(body, () => ({ anchors, compare, assemble, notes }[S.tab])(ctx));
+  renderInto(body, () => ({ anchors, compare, assemble, notes, sequence: sequenceTab, browser: browserTab }[S.tab])(ctx));
 }
 
 function context(ctx) {

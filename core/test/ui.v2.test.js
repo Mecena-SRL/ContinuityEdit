@@ -94,3 +94,41 @@ test('lavagna: zoom, fit, ordini', () => {
   assert.equal(frameFromRatio(0.5, 101), 50);
   assert.deepEqual(clampSize(10, 500.4), { w: 60, h: 500 });
 });
+
+import { cacheKey, frameFromX, xFromFrame, quantizeFrame, autoScanFrames, LruCache, pruneIndex, VideoPool, SeekQueue, placeholderTimecode } from '../../plugin/renderer/viewmodel/thumbs.js';
+
+test('miniature: chiavi, frame da posizione, scansione', () => {
+  assert.equal(cacheKey('C1', 120.4, 320), 'C1|120|320');
+  assert.equal(frameFromX(0, 200, 1000), 0);
+  assert.equal(frameFromX(200, 200, 1000), 999);
+  assert.equal(frameFromX(-5, 200, 1000), 0);
+  assert.equal(frameFromX(100, 0, 1000), 0);
+  assert.equal(xFromFrame(999, 200, 1000), 200);
+  assert.equal(quantizeFrame(123, 25), 125);
+  assert.deepEqual(autoScanFrames(4, 1000), [125, 375, 625, 875]);
+  assert.equal(autoScanFrames(1000, 10).length, 60);
+  assert.equal(placeholderTimecode(90, 25), '00:00:03:15');
+});
+
+test('miniature: LRU per byte e indice IndexedDB', () => {
+  const c = new LruCache({ maxBytes: 100 });
+  c.set('a', 1, 60); c.set('b', 2, 30);
+  c.get('a');
+  assert.deepEqual(c.set('c', 3, 30), ['b']);
+  assert.ok(c.has('a') && c.has('c') && !c.has('b'));
+  const idx = [{ key: 'x', size: 60, ts: 3 }, { key: 'y', size: 60, ts: 1 }, { key: 'z', size: 60, ts: 2 }];
+  assert.deepEqual(pruneIndex(idx, 100), ['y', 'z']);
+  assert.deepEqual(pruneIndex(idx, 1000), []);
+});
+
+test('miniature: pool video max 3 e coda di seek con annullamento scrub', () => {
+  const p = new VideoPool(3);
+  assert.equal(p.touch('a'), null); p.touch('b'); p.touch('c');
+  assert.equal(p.touch('a'), null);
+  assert.equal(p.touch('d'), 'b');
+  const q = new SeekQueue();
+  assert.deepEqual(q.push({ id: 1, scrub: true }), []);
+  assert.deepEqual(q.push({ id: 2, scrub: false }), []);
+  assert.deepEqual(q.push({ id: 3, scrub: true }).map((x) => x.id), [1]);
+  assert.deepEqual([q.next().id, q.next().id, q.next()], [2, 3, null]);
+});

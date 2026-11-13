@@ -5,6 +5,8 @@ import { sourceKind, sourceLabel } from '../viewmodel/coverage.js';
 import { LOW_CONFIDENCE } from '../viewmodel/summary.js';
 import { TYPE_OPTIONS, typeFromKey, buildEdit } from '../viewmodel/scriptedit.js';
 import { RATINGS, gradePalette } from '../viewmodel/marks.js';
+import { trackLabel } from '../viewmodel/sequence.js';
+import { placeCamera, setMasterFor, moveHandle, nudgeCutaway, selectedCutaway, selectSeqItem } from './sequence.js';
 
 const COL_W = 20;
 
@@ -135,6 +137,11 @@ function gcell(ctx, l, c) {
   if (c.chosen) cls.push('chosen');
   if (c.best) cls.push('best');
   if (active) cls.push('active');
+  const seq = S.d.seq;
+  const cut = c.covered ? seq.cutMap.get(`${c.takeId}|${l.id}`) : null;
+  if (c.covered && seq.master === c.takeId) cls.push('master');
+  else if (cut) cls.push('cut');
+  else if (c.covered && seq.any) cls.push('unused');
   const desc = c.covered
     ? `${label}: copre la riga (${sourceLabel(c.source)}${c.estimated ? ', stimata' : ''})${c.chosen ? ', scelto' : ''}${c.best ? ', migliore' : ''}`
     : `${label}: non copre la riga`;
@@ -142,11 +149,32 @@ function gcell(ctx, l, c) {
     class: cls.join(' '), type: 'button', tabindex: '-1', style: { '--c': ctx.takeColor(c.takeId) }, title: desc, 'aria-label': desc,
     onclick: (e) => {
       e.stopPropagation();
+      if (cut) selectSeqItem(cut.id);
       ctx.selectLine(l.id, 'replace');
       if (c.covered) ctx.chooseTake(l.id, c.takeId); else ctx.setActiveTake(c.takeId);
     },
   }, c.covered ? h('span', { class: 'bar' }, (c.pos === 'start' || c.pos === 'single') ? h('i', { class: `kind kind-${kind}` }) : null) : null,
+  cut && l.id === cut.fromLineId ? h('span', { class: 'vlabel' }, trackLabel(cut.track || 2)) : null,
+  cut && l.id === cut.fromLineId ? handle(ctx, cut, 'from', l.id) : null,
+  cut && l.id === cut.toLineId ? handle(ctx, cut, 'to', l.id) : null,
   c.chosen ? h('span', { class: 'check', 'aria-hidden': 'true' }, '✓') : null);
+}
+
+/** Maniglia di inizio/fine di un cutaway: si trascina sulle righe (scatta alla riga sotto il puntatore). */
+function handle(ctx, item, edge, lineId) {
+  return h('span', {
+    class: `hdl hdl-${edge}`, title: edge === 'from' ? 'Trascina: inizio del cutaway' : 'Trascina: fine del cutaway', role: 'presentation',
+    onclick: (e) => e.stopPropagation(),
+    onpointerdown: (e) => {
+      e.preventDefault(); e.stopPropagation(); document.body.classList.add('dragging-h');
+      const up = (ev) => {
+        window.removeEventListener('pointerup', up); document.body.classList.remove('dragging-h');
+        const row = document.elementFromPoint(ev.clientX, ev.clientY)?.closest('[data-line]');
+        if (row) moveHandle(ctx, item, edge, row.dataset.line);
+      };
+      window.addEventListener('pointerup', up);
+    },
+  });
 }
 
 function onKey(e, ctx) {
@@ -165,6 +193,11 @@ function onKey(e, ctx) {
   };
   const mode = e.shiftKey ? 'range' : 'replace';
   const cur = vis[idx];
+  if ((e.key === '[' || e.key === ']' || e.code === 'BracketLeft' || e.code === 'BracketRight') && selectedCutaway(S)) {
+    e.preventDefault();
+    const d = (e.key === '[' || e.code === 'BracketLeft' ? -1 : 1) * (e.shiftKey ? 5 : 1);
+    nudgeCutaway(ctx, selectedCutaway(S), e.altKey ? 'start' : 'end', d); return;
+  }
   const typ = typeFromKey(e);
   if (typ) { e.preventDefault(); applyType(ctx, typ, null); return; }
   if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z') { e.preventDefault(); ctx.run('Annulla', () => (e.shiftKey ? ctx.ce.redo() : ctx.ce.undo())).then((r) => r && r.ok === false && ctx.toast(r.reason || 'Niente da annullare.', 'info')); return; }
@@ -234,10 +267,13 @@ function onContext(e, ctx, line) {
   if (!ts && !ctx.S.sel.includes(line.id)) ctx.selectLine(line.id, 'replace');
   closeMenu();
   const what = ts ? 'la selezione' : ctx.S.sel.length > 1 ? `${ctx.S.sel.length} righe` : 'la riga';
-  menuEl = h('div', { class: 'menu ctxmenu', role: 'menu', 'aria-label': 'Segna come', style: { left: `${Math.min(e.clientX, window.innerWidth - 220)}px`, top: `${Math.min(e.clientY, window.innerHeight - 290)}px` } },
+  menuEl = h('div', { class: 'menu ctxmenu', role: 'menu', 'aria-label': 'Segna come', style: { left: `${Math.min(e.clientX, window.innerWidth - 220)}px`, top: `${Math.min(e.clientY, window.innerHeight - 360)}px` } },
     h('div', { class: 'menu-title' }, `Segna ${what} come:`),
     TYPE_OPTIONS.map((o) => h('button', { class: 'menu-item', role: 'menuitem', type: 'button', onclick: () => { closeMenu(); applyType(ctx, o.type, ts, ts ? line.id : null); } },
-      h('span', {}, o.label), h('kbd', {}, `Alt+${o.key.toUpperCase()}`))));
+      h('span', {}, o.label), h('kbd', {}, `Alt+${o.key.toUpperCase()}`))),
+    h('div', { class: 'menu-sep', role: 'separator' }),
+    h('button', { class: 'menu-item', role: 'menuitem', type: 'button', onclick: () => { closeMenu(); placeCamera(ctx, line.id); } }, h('span', {}, 'Metti questa camera qui'), h('kbd', {}, 'V2')),
+    h('button', { class: 'menu-item', role: 'menuitem', type: 'button', disabled: !ctx.S.activeTakeId, onclick: () => { closeMenu(); setMasterFor(ctx, ctx.S.activeTakeId); } }, h('span', {}, 'Imposta take attivo come master'), h('kbd', {}, 'V1')));
   menuEl.addEventListener('keydown', (ev) => {
     const items = [...menuEl.querySelectorAll('[role=menuitem]')]; const i = items.indexOf(document.activeElement);
     if (ev.key === 'ArrowDown') { ev.preventDefault(); items[(i + 1) % items.length].focus(); }
