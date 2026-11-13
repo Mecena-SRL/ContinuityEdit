@@ -330,7 +330,41 @@ export function createBridge(resolveOrGetter, { lazy = false, fileExists = null,
     const prop = async (k) => { try { const v = await item.GetClipProperty(k); return v === undefined || v === '' ? null : v; } catch { return null; } };
     const path = await prop('File Path');
     if (!path) return { ok: false, reason: 'proprieta\' File Path non disponibile per questa clip (clip generata o offline?)' };
-    return { ok: true, path: String(path), codec: await prop('Video Codec'), fps: num(await prop('FPS')) };
+    const proxy = await prop('Proxy Media Path');
+    const tc = await prop('Start TC');
+    const fps = num(await prop('FPS'));
+    return {
+      ok: true, path: String(path), proxyPath: proxy ? String(proxy) : null, codec: await prop('Video Codec'), fps,
+      startTcFrames: typeof tc === 'string' ? (tcToFrames(tc, fps, 0) ?? 0) : 0,
+    };
+  }
+
+  // Still = marker Cyan sulla clip (nessun file). customData 'ce:still:<itemId>'. Un marker gia' presente sul frame => ok:false.
+  async function addStillMarker(clipId, frame, itemId) {
+    const item = await findItem(clipId);
+    if (!item) return { ok: false, reason: 'clip non trovata nel Media Pool' };
+    const r = await attempt(() => item.AddMarker(Math.round(frame), 'Cyan', 'Still', '', 1, `${MARKER_PREFIX}still:${itemId}`), 'AddMarker');
+    if (!r.ok) return { ok: false, reason: r.reason };
+    if (r.value === false) return { ok: false, reason: 'AddMarker ha restituito false (esiste gia\' un marker su quel frame?)' };
+    return { ok: true };
+  }
+
+  // Toglie il marker dello still: DeleteMarkerByCustomData, altrimenti ricerca per customData + DeleteMarkerAtFrame.
+  async function removeStillMarker(clipId, itemId) {
+    const item = await findItem(clipId);
+    if (!item) return { ok: false, reason: 'clip non trovata nel Media Pool' };
+    const tag = `${MARKER_PREFIX}still:${itemId}`;
+    if (isFn(item, 'DeleteMarkerByCustomData')) {
+      const r = await attempt(() => item.DeleteMarkerByCustomData(tag), 'DeleteMarkerByCustomData');
+      if (r.ok && r.value !== false) return { ok: true };
+    }
+    const m = await attempt(async () => {
+      for (const [f, mk] of Object.entries((await item.GetMarkers()) || {})) {
+        if (mk.customData === tag) return item.DeleteMarkerAtFrame(Number(f));
+      }
+      return false;
+    }, 'DeleteMarkerAtFrame');
+    return m.ok && m.value ? { ok: true } : { ok: false, reason: m.reason || 'marker dello still non trovato' };
   }
 
   // Primo tentativo: MediaPoolItem.ExportFrame(frame, percorso). Firma non verificata: niente eccezioni.
@@ -635,6 +669,6 @@ export function createBridge(resolveOrGetter, { lazy = false, fileExists = null,
   return {
     getEnv, getSelectedClips, getClip, transcribe, status, getTranscription, previewLine,
     assemble, writeMarkers, playheadSourceFrame, runDiagnostics,
-    listBins, loadBins, detectGroups, getClipMediaPath, exportStill, executeAppendPlan,
+    listBins, loadBins, detectGroups, getClipMediaPath, exportStill, executeAppendPlan, addStillMarker, removeStillMarker,
   };
 }

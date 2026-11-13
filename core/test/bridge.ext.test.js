@@ -54,7 +54,7 @@ test('loadBins: clip di piu\' bin con bin e meta; bin mancanti segnalati; niente
 test('getClipMediaPath: File Path, codec, fps; assente => ok:false', async () => {
   const f = binsFake();
   const b = createBridge(f.resolve);
-  assert.deepEqual(await b.getClipMediaPath('a1'), { ok: true, path: '/m/a1.mov', codec: 'ProRes 422', fps: 25 });
+  assert.deepEqual(await b.getClipMediaPath('a1'), { ok: true, path: '/m/a1.mov', proxyPath: null, codec: 'ProRes 422', fps: 25, startTcFrames: 90000 });
   assert.equal((await b.getClipMediaPath('b1')).ok, false);
   assert.equal((await b.getClipMediaPath('nope')).ok, false);
 });

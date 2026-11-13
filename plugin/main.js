@@ -2,7 +2,9 @@
 // Main process del plugin ContinuityEdit (Workflow Integration di DaVinci Resolve Studio).
 // Contratto: docs/PLUGIN_API.md. La logica sta in ./main/*.js (testabile senza Electron).
 
-const { app, BrowserWindow, ipcMain, dialog } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, protocol } = require('electron');
+const { Readable } = require('node:stream');
+const { SCHEME, createMediaRegistry, planResponse } = require('./main/protocol.js');
 const path = require('node:path');
 const os = require('node:os');
 const fsp = require('node:fs/promises');
@@ -17,6 +19,24 @@ try {
   WorkflowIntegration = require('./WorkflowIntegration.node');
 } catch (e) {
   nodeLoadError = e;
+}
+
+// Deve avvenire prima di app ready. Il registro e' la whitelist dei file servibili (mai percorsi arbitrari).
+protocol.registerSchemesAsPrivileged([
+  { scheme: SCHEME, privileges: { standard: true, secure: true, supportFetchAPI: true, corsEnabled: true, stream: true } },
+]);
+const mediaRegistry = createMediaRegistry();
+
+function registerMediaProtocol() {
+  protocol.handle(SCHEME, async (request) => {
+    const filePath = mediaRegistry.resolve(request.url);
+    let size = null;
+    if (filePath) { try { size = (await fsp.stat(filePath)).size; } catch { size = null; } }
+    const plan = planResponse({ registry: mediaRegistry, url: request.url, rangeHeader: request.headers.get('range'), size });
+    if (plan.status !== 200 && plan.status !== 206) return new Response(null, { status: plan.status, headers: plan.headers });
+    const stream = Readable.toWeb(fs.createReadStream(plan.filePath, { start: plan.start, end: plan.end }));
+    return new Response(stream, { status: plan.status, headers: plan.headers });
+  });
 }
 
 let mainWindow = null;
@@ -43,6 +63,7 @@ function cleanUp() {
 }
 
 async function setup() {
+  registerMediaProtocol();
   const { loadCore } = require('./main/loadCore.js');
   const { createState } = require('./main/state.js');
   const { createPersist } = require('./main/persist.js');
@@ -59,7 +80,7 @@ async function setup() {
   const persist = createPersist({ dir: path.join(app.getPath('userData'), 'projects') });
 
   handlers = createHandlers({
-    core, bridge, state, persist,
+    core, bridge, state, persist, media: mediaRegistry,
     notify: (snap) => {
       if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('ce:changed', snap);
     },

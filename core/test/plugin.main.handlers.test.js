@@ -8,7 +8,9 @@ import path from 'node:path';
 import * as sync from '../src/sync/index.js';
 import { parseResolveTranscript } from '../src/transcript/parse.js';
 import { alignClip } from '../src/align/index.js';
-import { parseFdx, parsePdf } from '../src/script/index.js';
+import { parseFdx, parsePdf, applyScriptEdit } from '../src/script/index.js';
+import * as sequence from '../src/sequence/index.js';
+import * as board from '../src/board/index.js';
 import { createBridge } from '../src/bridge/resolveBridge.js';
 import { makeFakeResolve, syntheticTranscript } from './helpers/fakeResolve.js';
 import { muteScript } from './sync.helpers.js';
@@ -37,7 +39,7 @@ async function setup() {
   const written = {};
   const state = createState(sync);
   const h = createHandlers({
-    core: { sync, parseResolveTranscript, alignClip, parseFdx, parsePdf },
+    core: { sync, parseResolveTranscript, alignClip, parseFdx, parsePdf, applyScriptEdit, sequence, board },
     bridge: createBridge(f.resolve), state,
     persist: createPersist({ dir }),
     notify: (s) => events.push(s),

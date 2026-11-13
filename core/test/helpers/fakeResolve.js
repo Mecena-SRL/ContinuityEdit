@@ -46,6 +46,12 @@ export class FakeItem {
     this.markers[frame] = { color, name, note, duration, customData };
     return true;
   }
+  async DeleteMarkerByCustomData(cd) {
+    if (this.noDeleteByCustomData) return false;
+    const e = Object.entries(this.markers).find(([, m]) => m.customData === cd);
+    if (!e) return false;
+    delete this.markers[e[0]]; return true;
+  }
   async DeleteMarkerAtFrame(frame) { const had = frame in this.markers; delete this.markers[frame]; return had; }
   async GetTranscription() { return this.transcription; }
   async TranscribeAudio() { this.transcribeStatus = 'InProgress'; return true; }

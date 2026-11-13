@@ -8,12 +8,15 @@ const METHODS = [
   'getTranscribeStatus', 'autoSync', 'addAnchor', 'moveAnchor', 'removeAnchor', 'anchorFromMarker',
   'anchorFromPlayhead', 'getState', 'setSelection', 'setNote', 'saveProject', 'loadProject', 'previewLine',
   'assemble', 'writeMarkers', 'runDiagnostics',
-  'listBins', 'loadBins', 'detectGroups', 'setTakeGroup', 'getClipMediaPath', 'board.captureStill', 'saveFile',
-  'sequence.assemble',
+  'listBins', 'loadBins', 'detectGroups', 'setTakeGroup', 'getClipMediaPath', 'board.addStill', 'board.removeItem', 'board.refreshStillViaResolve', 'saveFile',
+  'editScript', 'undo', 'redo', 'setMark', 'setGradePalette',
+  'sequence.fromLines', 'sequence.addItem', 'sequence.moveItem', 'sequence.trimItem', 'sequence.removeItem',
+  'sequence.setMaster', 'sequence.addCutaway', 'sequence.trimCutaway', 'sequence.assemble',
+  'board.addItem', 'board.moveItem', 'board.resizeItem', 'board.setCaption', 'board.bringToFront', 'board.link', 'board.toSequence',
 ];
 
 const api = {};
-// i nomi con '.' diventano oggetti annidati: 'board.captureStill' -> window.ce.board.captureStill
+// i nomi con '.' diventano oggetti annidati: 'board.addStill' -> window.ce.board.addStill
 for (const name of METHODS) {
   const parts = name.split('.');
   let target = api;
