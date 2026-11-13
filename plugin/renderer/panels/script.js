@@ -3,6 +3,8 @@ import { h, renderInto } from '../dom.js';
 import { sceneList, highlightParts, lineTypeLabel } from '../viewmodel/script.js';
 import { sourceKind, sourceLabel } from '../viewmodel/coverage.js';
 import { LOW_CONFIDENCE } from '../viewmodel/summary.js';
+import { TYPE_OPTIONS, typeFromKey, buildEdit } from '../viewmodel/scriptedit.js';
+import { RATINGS, gradePalette } from '../viewmodel/marks.js';
 
 const COL_W = 20;
 
@@ -21,7 +23,9 @@ export function renderScript(el, ctx) {
     el.replaceChildren(bar, list);
     list.addEventListener('keydown', (e) => onKey(e, ctx));
   }
-  list.style.setProperty('--ncols', String(Math.max(1, view.takes.length)));
+  const takesShown = S.d.takes;
+  list.style.setProperty('--ncols', String(S.showLines ? Math.max(1, takesShown.length) : 0));
+  list.classList.toggle('no-lines', !S.showLines);
   list.style.setProperty('--colw', `${COL_W}px`);
 
   renderInto(bar, () => [
@@ -41,8 +45,17 @@ export function renderScript(el, ctx) {
       h('label', { class: 'chk' },
         h('input', { type: 'checkbox', checked: S.onlyUncovered, 'data-fk': 'only-unc', onchange: (e) => ctx.setFilter({ onlyUncovered: e.target.checked }) }),
         ' Solo non coperte')),
+    h('div', { class: 'bar-row bar-filters' },
+      h('label', { class: 'switch' }, h('input', { type: 'checkbox', role: 'switch', checked: S.showLines, 'data-fk': 'show-lines', onchange: (e) => ctx.setFilter({ showLines: e.target.checked }) }), h('span', { class: 'sw-track', 'aria-hidden': 'true' }), ' Mostra linee clip'),
+      h('div', { class: 'seg', role: 'group', 'aria-label': 'Filtro valutazione' }, RATINGS.map(([k, label]) => h('button', {
+        class: `seg-btn${S.ratingFilter === k ? ' on' : ''}`, type: 'button', 'aria-pressed': String(S.ratingFilter === k), 'data-fk': `rf-${k}`, onclick: () => ctx.setFilter({ ratingFilter: k }),
+      }, label))),
+      h('div', { class: 'seg', role: 'group', 'aria-label': 'Filtro voto' }, gradePalette(project).map((g) => h('button', {
+        class: `seg-btn${S.gradeFilter.includes(g) ? ' on' : ''}`, type: 'button', 'aria-pressed': String(S.gradeFilter.includes(g)), 'data-fk': `gf-${g}`,
+        onclick: () => ctx.setFilter({ gradeFilter: S.gradeFilter.includes(g) ? S.gradeFilter.filter((x) => x !== g) : [...S.gradeFilter, g] }),
+      }, g)))),
     h('div', { class: 'bar-row bar-sub' },
-      h('span', { class: 'dim' }, S.sel.length ? `${S.sel.length} ${S.sel.length === 1 ? 'riga selezionata' : 'righe selezionate'}` : 'Clic = seleziona · Maiusc = intervallo · Ctrl = aggiungi · 1-9 = scegli take'),
+      h('span', { class: 'dim' }, S.sel.length ? `${S.sel.length} ${S.sel.length === 1 ? 'riga selezionata' : 'righe selezionate'}` : 'Clic = seleziona · Maiusc = intervallo · 1-9 = scegli take · seleziona testo + tasto destro = segna come'),
       h('span', { class: 'tb-spacer' }),
       h('button', { class: 'btn btn-small', type: 'button', 'data-fk': 'sel-all', onclick: () => ctx.selectIds(visible.filter((l) => l.syncable).map((l) => l.id)) }, 'Seleziona visibili'),
       h('button', { class: 'btn btn-small', type: 'button', 'data-fk': 'sel-none', disabled: !S.sel.length, onclick: () => ctx.selectIds([]) }, 'Deseleziona')),
@@ -53,13 +66,21 @@ export function renderScript(el, ctx) {
     if (!visible.length) return h('div', { class: 'empty big' }, 'Nessuna riga corrisponde ai filtri.');
     const focusId = S.focusId && visible.some((l) => l.id === S.focusId) ? S.focusId : null;
     const nodes = [];
-    nodes.push(h('div', { class: 'gutter-head', role: 'presentation' },
-      h('span', { class: 'gh-title' }, 'Copertura →'),
-      h('div', { class: 'gh-cols' }, view.takes.map((t, i) => h('button', {
-        class: `gh-col${S.activeTakeId === t.id ? ' on' : ''}`, type: 'button', style: { '--c': ctx.takeColor(t.id) }, tabindex: '-1',
-        title: `${ctx.takeLabel(t.id)}${S.activeTakeId === t.id ? ' (attivo)' : ''}`, 'aria-label': `Attiva ${ctx.takeLabel(t.id)}`,
-        onclick: () => ctx.setActiveTake(t.id),
-      }, h('span', { class: 'gh-dot' }), h('span', { class: 'gh-num' }, i + 1))))));
+    if (S.showLines) {
+      const plan = S.d.plan;
+      nodes.push(h('div', { class: 'gutter-head', role: 'presentation' },
+        h('span', { class: 'gh-title' }, takesShown.length ? 'Copertura →' : 'Nessun take visibile'),
+        h('div', { class: 'gh-wrap' },
+          plan.groups.length ? h('div', { class: 'gh-groups' }, plan.cols.map((c) => {
+            const g = plan.groups.find((x) => x.groupId === c.groupId);
+            return h('span', { class: `gh-grp${g ? ' in' : ''}${g && g.from === c.col ? ' first' : ''}${g && g.from + g.count - 1 === c.col ? ' last' : ''}`, title: g ? `Multicam ${g.groupId}` : '' }, g && g.from === c.col ? 'MC' : '');
+          })) : null,
+          h('div', { class: 'gh-cols' }, plan.cols.map((c) => h('button', {
+            class: `gh-col${S.activeTakeId === c.takeId ? ' on' : ''}${c.groupId ? ' mc' : ''}`, type: 'button', style: { '--c': ctx.takeColor(c.takeId) }, tabindex: '-1',
+            title: `${ctx.takeLabel(c.takeId)}${c.angle ? ` · ${c.angle}` : ''}${S.activeTakeId === c.takeId ? ' (attivo)' : ''}`, 'aria-label': `Attiva ${ctx.takeLabel(c.takeId)}${c.angle ? ` ${c.angle}` : ''}`,
+            onclick: () => ctx.setActiveTake(c.takeId),
+          }, h('span', { class: 'gh-dot' }), h('span', { class: 'gh-num' }, c.angle ? c.angle.replace(/^CAM\s*/i, '') : c.col + 1)))))));
+    }
     visible.forEach((l, vi) => nodes.push(row(ctx, l, vi, { layout, unc, focusId, project, view })));
     return nodes;
   });
@@ -95,11 +116,12 @@ function row(ctx, l, vi, { layout, unc, focusId, project, view }) {
     role: 'option', 'aria-selected': String(selected), 'data-line': l.id, 'data-fk': `row-${l.id}`,
     tabindex: (focusId ? l.id === focusId : vi === 0) ? '0' : '-1',
     'aria-label': `${lineTypeLabel(l.type)}${l.character ? ` ${l.character}` : ''}: ${l.text}${uncovered ? '. Non coperta' : ''}`,
-    onclick: (e) => ctx.selectLine(l.id, e.shiftKey ? 'range' : (e.ctrlKey || e.metaKey) ? 'toggle' : 'replace'),
+    onclick: (e) => { if (textSelectionIn(e.currentTarget)) return; ctx.selectLine(l.id, e.shiftKey ? 'range' : (e.ctrlKey || e.metaKey) ? 'toggle' : 'replace'); },
+    oncontextmenu: (e) => onContext(e, ctx, l),
     ondblclick: () => { const t = chosenId || bestId || S.activeTakeId; if (t) ctx.preview(l.id, t); },
   },
   h('div', { class: 'line-body' }, body, tags.length ? h('div', { class: 'tags' }, tags) : null),
-  h('div', { class: 'gutter', style: { width: `calc(var(--ncols) * var(--colw))` } }, cells.map((c) => gcell(ctx, l, c))));
+  S.showLines ? h('div', { class: 'gutter', style: { width: `calc(var(--ncols) * var(--colw))` } }, cells.map((c) => gcell(ctx, l, c))) : null);
 }
 
 function gcell(ctx, l, c) {
@@ -143,6 +165,10 @@ function onKey(e, ctx) {
   };
   const mode = e.shiftKey ? 'range' : 'replace';
   const cur = vis[idx];
+  const typ = typeFromKey(e);
+  if (typ) { e.preventDefault(); applyType(ctx, typ, null); return; }
+  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z') { e.preventDefault(); ctx.run('Annulla', () => (e.shiftKey ? ctx.ce.redo() : ctx.ce.undo())).then((r) => r && r.ok === false && ctx.toast(r.reason || 'Niente da annullare.', 'info')); return; }
+  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'y') { e.preventDefault(); ctx.run('Ripeti', () => ctx.ce.redo()); return; }
   if (e.key === 'ArrowDown') { e.preventDefault(); go(idx + 1, mode); }
   else if (e.key === 'ArrowUp') { e.preventDefault(); go(idx - 1, mode); }
   else if (e.key === 'PageDown') { e.preventDefault(); go(idx + 8, mode); }
@@ -157,10 +183,68 @@ function onKey(e, ctx) {
     const t = S.snap.project?.selection?.[cur.id] || S.activeTakeId || S.snap.view.bestTake?.[cur.id];
     if (t) ctx.preview(cur.id, t);
   } else if (/^[1-9]$/.test(e.key) && !e.ctrlKey && !e.metaKey && !e.altKey) {
-    const t = S.snap.view.takes[Number(e.key) - 1];
+    const t = S.d.takes[Number(e.key) - 1];
     if (!t) return;
     e.preventDefault();
     const covered = (S.snap.view.coverage?.[t.id] || []).some((c) => c.lineId === cur.id);
     if (covered) ctx.chooseTake(cur.id, t.id); else { ctx.setActiveTake(t.id); ctx.toast(`“${ctx.takeLabel(t.id)}” non copre questa riga: take attivato per impostare le ancore.`, 'info'); }
   }
+}
+
+// ---------- spoglio: selezione di testo + menu contestuale ----------
+const textEl = (row) => row.querySelector('.txt, .dlg-text, .scene-title');
+
+/** {lineId,start,end,text} se c'e' una selezione non vuota dentro il testo della riga. */
+function textSelectionIn(row) {
+  const sel = window.getSelection();
+  if (!sel || sel.isCollapsed || !sel.rangeCount) return null;
+  const el = textEl(row);
+  const r = sel.getRangeAt(0);
+  if (!el || !el.contains(r.startContainer) || !el.contains(r.endContainer)) return null;
+  const pre = document.createRange(); pre.setStart(el, 0); pre.setEnd(r.startContainer, r.startOffset);
+  const start = pre.toString().length;
+  return { start, end: start + r.toString().length };
+}
+
+export async function applyType(ctx, type, textSel, lineId) {
+  const { S } = ctx;
+  const label = TYPE_OPTIONS.find((o) => o.type === type)?.label || type;
+  const ids = lineId ? [lineId] : (S.sel.length ? S.sel : [S.focusId]).filter(Boolean);
+  if (!ids.length) { ctx.toast('Seleziona una riga o una porzione di testo.', 'info'); return; }
+  const r = await ctx.run('Spoglio', async () => {
+    for (const id of ids) {
+      const line = S.d.byId.get(id);
+      if (!line) continue;
+      const edit = ids.length === 1 && textSel ? buildEdit(line, textSel.start, textSel.end, type) : buildEdit(line, 0, 0, type);
+      const res = await ctx.ce.editScript(edit);
+      if (res && res.ok === false) throw new Error(res.reason || 'modifica non riuscita');
+    }
+    return true;
+  });
+  if (r) ctx.toast(`Segnato come ${label}. Ctrl+Z per annullare.`, 'ok');
+}
+
+let menuEl = null;
+function closeMenu() { menuEl?.remove(); menuEl = null; }
+
+function onContext(e, ctx, line) {
+  e.preventDefault();
+  const row = e.currentTarget;
+  const ts = textSelectionIn(row);
+  if (!ts && !ctx.S.sel.includes(line.id)) ctx.selectLine(line.id, 'replace');
+  closeMenu();
+  const what = ts ? 'la selezione' : ctx.S.sel.length > 1 ? `${ctx.S.sel.length} righe` : 'la riga';
+  menuEl = h('div', { class: 'menu ctxmenu', role: 'menu', 'aria-label': 'Segna come', style: { left: `${Math.min(e.clientX, window.innerWidth - 220)}px`, top: `${Math.min(e.clientY, window.innerHeight - 290)}px` } },
+    h('div', { class: 'menu-title' }, `Segna ${what} come:`),
+    TYPE_OPTIONS.map((o) => h('button', { class: 'menu-item', role: 'menuitem', type: 'button', onclick: () => { closeMenu(); applyType(ctx, o.type, ts, ts ? line.id : null); } },
+      h('span', {}, o.label), h('kbd', {}, `Alt+${o.key.toUpperCase()}`))));
+  menuEl.addEventListener('keydown', (ev) => {
+    const items = [...menuEl.querySelectorAll('[role=menuitem]')]; const i = items.indexOf(document.activeElement);
+    if (ev.key === 'ArrowDown') { ev.preventDefault(); items[(i + 1) % items.length].focus(); }
+    if (ev.key === 'ArrowUp') { ev.preventDefault(); items[(i - 1 + items.length) % items.length].focus(); }
+    if (ev.key === 'Escape') { closeMenu(); row.focus(); }
+  });
+  document.body.append(menuEl);
+  menuEl.querySelector('[role=menuitem]').focus();
+  setTimeout(() => document.addEventListener('click', closeMenu, { once: true }), 0);
 }

@@ -1,5 +1,6 @@
 // window.ce simulato per provare la UI senza Resolve. Dati interamente SINTETICI.
 // Usa il modello di sync del core (puro) cosi' copertura/ancore si comportano come nel plugin vero.
+import { createExt } from './mockExt.js';
 import {
   createProject, addClip, addTake, setSelection, setNote, addAnchor, moveAnchor, removeAnchor,
   coverageForTake, bestTake, checkAnchors, planAssemblyDetailed,
@@ -106,7 +107,8 @@ export function createMockCe(opts = {}) {
     for (const l of lines) best[l.id] = bestTake(project, l.id);
     return { lines, takes, coverage, bestTake: best, warnings: checkAnchors(project) };
   };
-  const snapshot = () => ({ project: JSON.parse(JSON.stringify(project)), view: view() });
+  let ext = null;
+  const snapshot = () => { const s = { project: JSON.parse(JSON.stringify(project)), view: view() }; return ext ? ext.decorate(s) : s; };
   const emit = () => { const s = snapshot(); state.listeners.forEach((cb) => cb(s)); };
   const mutate = async (fn) => { const r = fn(); emit(); return r; };
   const takeOf = (takeId) => project.takes.find((t) => t.id === takeId);
@@ -212,6 +214,8 @@ export function createMockCe(opts = {}) {
     },
     async runDiagnostics() { await delay(500); return { ok: true, path: '~/Desktop/continuityedit_diag.json' }; },
   };
-  ce.__state = state; ce.__log = log; ce.__emit = emit;
+  ext = createExt({ getProject: () => project, emit, opts });
+  Object.assign(ce, ext.api);
+  ce.__state = state; ce.__log = log; ce.__emit = emit; ce.__ext = ext.E;
   return ce;
 }

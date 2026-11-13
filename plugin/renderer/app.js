@@ -7,6 +7,11 @@ import { renderTopbar } from './panels/topbar.js';
 import { renderTakes } from './panels/takes.js';
 import { renderScript } from './panels/script.js';
 import { renderDock } from './panels/dock.js';
+import { renderBoard } from './panels/board.js';
+import { openGuide } from './panels/guide.js';
+import { buildColumnPlan } from './viewmodel/groups.js';
+import { filterTakeList } from './viewmodel/marks.js';
+import { GUIDE_KEY, shouldShowGuide } from './viewmodel/guide.js';
 
 const ce = window.ce;
 
@@ -16,6 +21,7 @@ const S = {
   sel: [], focusId: null, rangeAnchor: null,
   activeTakeId: null,
   sceneId: null, query: '', onlyUncovered: false, matchIndex: 0,
+  showLines: store.get('ce.showLines', true), ratingFilter: 'tutti', gradeFilter: [], boardOpen: false,
   tab: 'anchors',
   clips: {},          // clipId -> info da getSelectedClips (marker, transcribed, ...)
   transcribing: new Set(),
@@ -51,8 +57,10 @@ function derive() {
   const visibleBase = filterLines(view.lines, { sceneId: S.sceneId, query: S.query });
   const unc = uncoveredLineIds(view.lines, view.coverage);
   const visible = S.onlyUncovered ? visibleBase.filter((l) => unc.has(l.id) || l.type === 'scene') : visibleBase;
-  const layout = buildCoverageLayout(visible, view.takes, view.coverage, project?.selection || {}, view.bestTake || {});
-  S.d = { byId, visible, unc, layout, matches: searchMatches(view.lines, S.query) };
+  const allTakes = view.takes.map((t) => ({ ...(project?.takes?.find((p) => p.id === t.id) || {}), ...t }));
+  const plan = buildColumnPlan(filterTakeList(allTakes, { rating: S.ratingFilter, grades: S.gradeFilter }));
+  const layout = buildCoverageLayout(visible, plan.ordered, view.coverage, project?.selection || {}, view.bestTake || {});
+  S.d = { byId, visible, unc, layout, plan, allTakes, takes: plan.ordered, matches: searchMatches(view.lines, S.query) };
 }
 
 // ---------- render ----------
@@ -61,6 +69,7 @@ const panels = {
   takes: () => renderTakes(document.getElementById('takes'), ctx),
   script: () => renderScript(document.getElementById('script'), ctx),
   dock: () => renderDock(document.getElementById('dock'), ctx),
+  board: () => renderBoard(ctx),
 };
 let scheduled = null;
 function rerender(which = Object.keys(panels)) {
@@ -148,7 +157,8 @@ const ctx = {
     ctx.selectLine(m[S.matchIndex]);
     document.querySelector(`[data-line="${m[S.matchIndex]}"]`)?.scrollIntoView({ block: 'center' });
   },
-  setFilter(patch) { Object.assign(S, patch); rerender(['script', 'dock']); },
+  setFilter(patch) { Object.assign(S, patch); if ('showLines' in patch) store.set('ce.showLines', S.showLines); rerender(['takes', 'script', 'dock']); },
+  openGuide: () => openGuide(),
   scrollToLine(id) { requestAnimationFrame(() => document.querySelector(`[data-line="${CSS.escape(id)}"]`)?.scrollIntoView({ block: 'center' })); },
 };
 
@@ -161,6 +171,7 @@ async function init() {
     applyState(await ce.getState());
     ce.onChange((snap) => applyState(snap));
     refreshClips().then(() => rerender(['takes', 'dock']));
+    if (shouldShowGuide(store.get(GUIDE_KEY, false))) openGuide();
   } catch (e) {
     toast(`Avvio: ${e.message || e}`, 'error', 0);
   }

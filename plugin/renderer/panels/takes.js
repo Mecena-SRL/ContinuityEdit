@@ -1,9 +1,13 @@
 // Pannello Clip/Take: aggiunta clip selezionate, trascrizione, sync automatico, rimozione, colore/etichetta.
-import { h, renderInto } from '../dom.js';
+import { h, renderInto, store } from '../dom.js';
+import { multicamGroups, anglesForGroup } from '../viewmodel/groups.js';
+import { ratingLabel } from '../viewmodel/marks.js';
 import { takeStats } from '../viewmodel/summary.js';
 import { formatDuration } from '../viewmodel/format.js';
 
 let pollTimer = null;
+const bins = { open: false, list: null, sel: new Set(store.get('ce.bins', [])) };
+
 
 function startPolling(ctx) {
   if (pollTimer) return;
@@ -66,12 +70,53 @@ export function renderTakes(el, ctx) {
     if (ok) await run('Rimozione take', () => ce.removeTake(takeId));
   }
 
+  async function toggleBins() {
+    bins.open = !bins.open;
+    if (bins.open && !bins.list) {
+      const r = await run('Elenco bin', () => ce.listBins());
+      bins.list = r || [];
+    }
+    ctx.rerender(['takes']);
+  }
+  async function loadBins() {
+    const names = [...bins.sel];
+    if (!names.length) { toast('Spunta almeno un bin di scena.', 'warn'); return; }
+    store.set('ce.bins', names);
+    const r = await run('Caricamento bin', () => ce.loadBins(names));
+    if (!r) return;
+    for (const c of r) S.clips[c.clipId] = c;
+    toast(`${r.length} clip caricate da ${names.length} ${names.length === 1 ? 'bin' : 'bin'}.`, 'ok');
+  }
+  async function detect() {
+    const found = await run('Raggruppa angoli', () => ce.detectGroups());
+    if (!found) return;
+    if (!found.length) { toast('Nessun gruppo multicam trovato (servono più angoli della stessa ripresa).', 'info'); return; }
+    const txt = found.map((g) => `${g.label || g.groupId} (${g.takeIds.length} angoli, ${g.reason || 'rilevato'})`).join('; ');
+    if (!(await ctx.confirmDialog(`Trovati ${found.length} gruppi: ${txt}. Raggrupparli?`, { okLabel: 'Raggruppa' }))) return;
+    await run('Raggruppa angoli', async () => {
+      for (const g of found) for (const a of anglesForGroup(g.takeIds)) await ce.setTakeGroup(a.takeId, g.groupId, a.angle);
+    });
+    toast('Angoli raggruppati.', 'ok');
+  }
+  const mc = multicamGroups(S.d.allTakes || []);
+
   const untranscribed = view.takes.filter((t) => !(S.clips[t.clipId]?.transcribed) && !S.transcribing.has(t.clipId)).map((t) => t.clipId);
 
   renderInto(el, () => [
     h('div', { class: 'panel-head' }, h('h2', {}, 'Clip e take')),
+    h('div', { class: 'bins' },
+      h('button', { class: 'btn', type: 'button', 'data-fk': 'bins-toggle', 'aria-expanded': String(bins.open), onclick: toggleBins }, `Bin di scena ${bins.open ? '▴' : '▾'}${bins.sel.size ? ` (${bins.sel.size})` : ''}`),
+      bins.open ? h('div', { class: 'bins-body' },
+        bins.list && bins.list.length ? h('ul', { class: 'bin-list' }, bins.list.map((b) => h('li', {},
+          h('label', { class: 'chk' }, h('input', {
+            type: 'checkbox', checked: bins.sel.has(b.name), 'data-fk': `bin-${b.name}`,
+            onchange: (e) => { if (e.target.checked) bins.sel.add(b.name); else bins.sel.delete(b.name); ctx.rerender(['takes']); },
+          }), ` ${b.name} `, h('span', { class: 'dim' }, `(${b.clipCount})`)))))
+          : h('p', { class: 'dim' }, bins.list ? 'Nessun bin trovato nel Media Pool.' : 'Caricamento…'),
+        h('button', { class: 'btn btn-primary btn-small', type: 'button', 'data-fk': 'bins-load', disabled: !bins.sel.size || S.busy.has('Caricamento bin'), onclick: loadBins }, 'Carica bin')) : null),
     h('div', { class: 'panel-actions' },
       h('button', { class: 'btn btn-primary', type: 'button', 'data-fk': 'add-clips', disabled: S.busy.has('Aggiunta clip'), onclick: addSelected }, 'Aggiungi clip selezionate'),
+      view.takes.length > 1 ? h('button', { class: 'btn', type: 'button', 'data-fk': 'detect', onclick: detect, title: 'Riconosce i take della stessa ripresa da più camere' }, `Raggruppa angoli${mc.length ? ` (${mc.length})` : ''}`) : null,
       view.takes.length ? h('button', { class: 'btn', type: 'button', 'data-fk': 'tr-all', disabled: !untranscribed.length, onclick: () => transcribe(untranscribed) }, `Trascrivi tutte (${untranscribed.length})`) : null),
     view.takes.length === 0
       ? h('p', { class: 'empty' }, 'Nessun take. Seleziona le clip nel Media Pool di Resolve e premi “Aggiungi clip selezionate”.')
@@ -87,6 +132,7 @@ function takeCard(ctx, t, st, act) {
   const done = !!info?.transcribed;
   const active = S.activeTakeId === t.id;
   const color = ctx.takeColor(t.id);
+  const tk = S.d.allTakes?.find((x) => x.id === t.id) || t;
   const state = running ? ['In trascrizione…', 'run'] : done ? ['Trascritta', 'ok'] : info ? ['Non trascritta', 'warn'] : ['Stato sconosciuto', 'dim'];
   return h('li', { class: `take-card${active ? ' active' : ''}`, style: { '--c': color } },
     h('div', { class: 'take-top' },
@@ -102,6 +148,11 @@ function takeCard(ctx, t, st, act) {
         class: `btn btn-small${active ? ' btn-on' : ''}`, type: 'button', 'aria-pressed': String(active), 'data-fk': `act-${t.id}`,
         onclick: () => ctx.setActiveTake(t.id),
       }, active ? 'Attivo' : 'Attiva')),
+    h('div', { class: 'take-tags' },
+      tk.groupId ? h('span', { class: 'chip' }, `${tk.angle || 'angolo'} · gruppo ${tk.groupId}`) : null,
+      tk.rating ? h('span', { class: `chip ${tk.rating === 'buono' ? 'ok' : 'bad'}` }, ratingLabel(tk.rating)) : null,
+      tk.grade ? h('span', { class: 'chip grade' }, tk.grade) : null,
+      tk.bin ? h('span', { class: 'chip' }, tk.bin) : null),
     h('div', { class: 'take-meta' },
       h('span', { class: 'dim', title: t.name }, t.name || t.clipId),
       clip ? h('span', { class: 'dim' }, ` · ${formatDuration(clip.durationFrames, clip.fps)} · ${clip.fps} fps`) : null),

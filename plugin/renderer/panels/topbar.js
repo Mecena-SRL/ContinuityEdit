@@ -53,13 +53,15 @@ export function renderTopbar(el, ctx) {
 
   renderInto(el, () => [
     h('div', { class: 'tb-row' },
-      h('div', { class: 'brand' }, h('span', { class: 'brand-mark', 'aria-hidden': 'true' }, 'CE'), h('span', { class: 'brand-name' }, 'ContinuityEdit')),
+      h('div', { class: 'brand' }, h('img', { class: 'brand-logo', src: new URL('../../img/logo.svg', import.meta.url).href, alt: '', width: '22', height: '22' }), h('span', { class: 'brand-name' }, 'ContinuityEdit')),
       h('div', { class: 'proj', title: `${env.projectName || ''} · ${env.timelineName || ''}` },
         h('strong', {}, env.projectName || 'Nessun progetto'),
         h('span', { class: 'sep' }, '/'),
         h('span', {}, env.timelineName || 'Nessuna timeline'),
         env.timelineFps ? h('span', { class: 'dim' }, ` · ${env.timelineFps} fps`) : null),
       h('div', { class: 'tb-spacer' }),
+      h('button', { class: 'btn', type: 'button', 'data-fk': 'help', 'aria-label': 'Guida: prima di iniziare', title: 'Prima di iniziare', onclick: () => ctx.openGuide() }, '?'),
+      h('button', { class: 'btn', type: 'button', 'data-fk': 'open-board', onclick: () => { S.boardOpen = true; ctx.rerender(['board']); } }, 'Lavagna'),
       h('button', { class: 'btn btn-primary', type: 'button', 'data-fk': 'import', disabled: S.busy.has('Importazione'), onclick: importScript },
         S.busy.has('Importazione') ? 'Importazione…' : 'Importa sceneggiatura'),
       h('div', { class: 'menu-wrap' },

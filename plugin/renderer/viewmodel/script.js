@@ -94,5 +94,5 @@ export function sortByScriptOrder(lines, ids) {
 }
 
 export function lineTypeLabel(type) {
-  return ({ scene: 'Scena', action: 'Azione', dialogue: 'Battuta', character: 'Personaggio', parenthetical: 'Indicazione', transition: 'Transizione' })[type] || type;
+  return ({ scene: 'Scena', action: 'Azione', dialogue: 'Battuta', character: 'Personaggio', parenthetical: 'Indicazione', transition: 'Transizione', other: 'Altro' })[type] || type;
 }
