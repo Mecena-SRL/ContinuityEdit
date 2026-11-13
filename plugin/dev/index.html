@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="it">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>ContinuityEdit (harness)</title>
+  <link rel="stylesheet" href="../css/app.css">
+  <style>
+    #devbar { position: fixed; right: 8px; bottom: 2px; z-index: 50; background: #222; color: #ccc; font: 11px sans-serif; padding: 4px 8px; border: 1px solid #444; border-radius: 6px; display: flex; gap: 6px; align-items: center; opacity: .9; }
+    #devbar input { width: 70px; background: #111; color: #eee; border: 1px solid #555; border-radius: 4px; }
+  </style>
+</head>
+<body>
+  <a class="skip" href="#script">Vai alla sceneggiatura</a>
+  <div id="app">
+    <header id="topbar" class="topbar" aria-label="Barra superiore"></header>
+    <section id="takes" class="takes" aria-label="Clip e take"></section>
+    <main id="script" class="script" aria-label="Sceneggiatura" tabindex="-1"></main>
+    <aside id="dock" class="dock" aria-label="Ancore, confronto, assemblaggio e note"></aside>
+    <footer id="status" class="status" role="status"></footer>
+  </div>
+  <div id="toasts" class="toasts" aria-live="polite"></div>
+  <label id="devbar">Playhead simulato (frame) <input id="dev-ph" type="number" value="150"></label>
+  <script type="module">
+    import { createMockCe } from './mockCe.js';
+    window.ce = createMockCe();
+    document.getElementById('dev-ph').addEventListener('input', (e) => { window.ce.__state.playheadFrame = e.target.value === '' ? null : parseInt(e.target.value, 10); });
+    await import('../renderer/app.js');
+  </script>
+</body>
+</html>

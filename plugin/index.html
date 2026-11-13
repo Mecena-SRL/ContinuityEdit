@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="it">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; script-src 'self'">
+  <title>ContinuityEdit</title>
+  <link rel="stylesheet" href="css/app.css">
+</head>
+<body>
+  <a class="skip" href="#script">Vai alla sceneggiatura</a>
+  <div id="app">
+    <header id="topbar" class="topbar" aria-label="Barra superiore"></header>
+    <section id="takes" class="takes" aria-label="Clip e take"></section>
+    <main id="script" class="script" aria-label="Sceneggiatura" tabindex="-1"></main>
+    <aside id="dock" class="dock" aria-label="Ancore, confronto, assemblaggio e note"></aside>
+    <footer id="status" class="status" role="status"></footer>
+  </div>
+  <div id="toasts" class="toasts" aria-live="polite"></div>
+  <script type="module" src="renderer/app.js"></script>
+</body>
+</html>
