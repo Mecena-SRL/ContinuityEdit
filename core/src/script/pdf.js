@@ -2,6 +2,8 @@
 // Output: ScriptDoc (vedi docs/CONTRACTS.md) + warnings[] + confidence 0..1 per riga.
 // Non lancia mai eccezioni: PDF illeggibili o scansionati => ScriptDoc vuoto con warning.
 
+import { parseCharacter } from './character.js';
+
 const EMPTY_TEXT_WARNING = 'nessun testo estraibile (PDF scansionato?)';
 
 // ---------------------------------------------------------------- regex ----
@@ -296,15 +298,8 @@ function calibrate(rows, cw, warnings) {
 // ---------------------------------------------------- classificazione ----
 /** Divide "NOME (V.O.) (CONT'D)" in nome + estensioni. */
 function stripExt(text) {
-  const exts = [];
-  const name = text
-    .replace(/\(([^)]*)\)/g, (_, e) => {
-      exts.push(e.trim());
-      return ' ';
-    })
-    .replace(/\s+/g, ' ')
-    .trim();
-  return { name, exts };
+  // maiuscolo non forzato: isUpper() sul nome serve a distinguere i cue dal testo normale
+  return parseCharacter(text, { upper: false });
 }
 
 function looksLikeCharacter(text) {

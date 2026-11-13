@@ -2,6 +2,9 @@
 // Usa fast-xml-parser con preserveOrder per mantenere l'ordine dei Paragraph
 // (anche dentro <DualDialogue>) e dei <Text> multipli con stili diversi.
 import { XMLParser } from 'fast-xml-parser';
+import { splitCharacter } from './character.js';
+
+export { splitCharacter };
 
 const parser = new XMLParser({
   preserveOrder: true,
@@ -58,17 +61,6 @@ function collectParagraphs(nodes, acc) {
 /** Solo i <Text> diretti: SceneProperties/ScriptNote ecc. non contano. */
 function paragraphText(p) {
   return clean(rawText(childrenOf(p).filter((c) => tagOf(c) === 'Text')));
-}
-
-/** "anna (V.O.) (CONT'D)" -> { name: 'ANNA', ext: "(V.O.) (CONT'D)" } */
-export function splitCharacter(raw) {
-  const exts = [];
-  const stripped = raw.replace(/\([^)]*\)/g, (m) => {
-    exts.push(clean(m));
-    return ' ';
-  });
-  const name = clean(stripped.replace(/\^\s*$/, '')).toLocaleUpperCase('it');
-  return { name, ext: exts.length ? exts.join(' ') : null };
 }
 
 export function parseFdx(xmlString) {
