@@ -162,7 +162,7 @@ test('deserialize: errori chiari e migrazione v0', () => {
   bad((o) => { o.selection = { L2: 'T9' }; }, /selection/);
   const legacy = { scriptDoc: muteScript(), clips: { C1: { fps: 25, durationFrames: 100, startTcFrames: 0, name: 'x' } }, takes: [{ id: 'T1', clipId: 'C1', label: 'a' }] };
   const m = deserialize(JSON.stringify(legacy));
-  assert.equal(m.version, 1);
+  assert.equal(m.version, 2);
   assert.deepEqual(m.anchors, []);
   assert.deepEqual(m.selection, {});
 });
