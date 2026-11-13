@@ -5,6 +5,7 @@
 // restituiscono {ok:false, reason} e sono coperte da runDiagnostics().
 
 import { tcToFrames } from '../transcript/timecode.js';
+import { detectGroups as detectGroupsPure } from './groups.js';
 
 export const MARKER_PREFIX = 'ce:';
 const errText = (e) => (e && e.message ? e.message : String(e));
@@ -26,8 +27,9 @@ const num = (v) => {
 
 /**
  * @param {object|Function} resolveOrGetter oggetto Resolve; con {lazy:true} una funzione async che lo restituisce
+ * @param {{fileExists?:(path)=>Promise<boolean>|boolean, tmpDir?:string}} opts fileExists verifica i file esportati (still); tmpDir abilita la prova ExportFrame in diagnostica
  */
-export function createBridge(resolveOrGetter, { lazy = false } = {}) {
+export function createBridge(resolveOrGetter, { lazy = false, fileExists = null, tmpDir = null } = {}) {
   let cached = null;
   const R = async () => {
     if (!lazy) return resolveOrGetter;
@@ -254,6 +256,202 @@ export function createBridge(resolveOrGetter, { lazy = false } = {}) {
     return { ok: true, timelineName: name, itemsAdded: added, skipped };
   }
 
+  // ---------------------------------------------------------------- bin, metadati, gruppi (contratto v2)
+  const META_KEYS = { scene: 'Scene', shot: 'Shot', take: 'Take', camera: 'Camera #', angle: 'Angle' };
+  async function clipMeta(item) {
+    const meta = {};
+    for (const [k, prop] of Object.entries(META_KEYS)) {
+      let v = null;
+      try { v = await item.GetClipProperty(prop); } catch { /* proprieta' assente */ }
+      meta[k] = v === null || v === undefined || String(v).trim() === '' ? null : String(v).trim();
+    }
+    return meta;
+  }
+
+  async function folderName(folder) {
+    const r = isFn(folder, 'GetName') ? await attempt(() => folder.GetName(), 'GetName') : null;
+    return r && r.ok && r.value ? String(r.value) : 'Bin';
+  }
+
+  // Sottocartelle ricorsive del Media Pool (root esclusa): [{name, path, clipCount, folder}] con `folder` interno.
+  async function walkBins() {
+    const mp = await getMediaPool();
+    const out = [];
+    const walk = async (folder, prefix, depth) => {
+      if (depth > 12) return;
+      const subs = isFn(folder, 'GetSubFolderList') ? (await folder.GetSubFolderList()) || [] : [];
+      for (const sub of subs) {
+        const name = await folderName(sub);
+        const path = prefix ? `${prefix}/${name}` : name;
+        const clips = isFn(sub, 'GetClipList') ? (await sub.GetClipList()) || [] : [];
+        out.push({ name, path, clipCount: clips.length, folder: sub });
+        await walk(sub, path, depth + 1);
+      }
+    };
+    await walk(await mp.GetRootFolder(), '', 0);
+    return out;
+  }
+
+  async function listBins() {
+    return (await walkBins()).map(({ name, path, clipCount }) => ({ name, path, clipCount }));
+  }
+
+  // names: nomi o percorsi dei bin. Ritorna {clips:[clipInfo + bin + binPath + meta], missing:[nome]}.
+  async function loadBins(names) {
+    const bins = await walkBins();
+    const clips = [];
+    const missing = [];
+    const seen = new Set();
+    for (const wanted of names || []) {
+      const hit = bins.filter((b) => b.path === wanted);
+      const matches = hit.length ? hit : bins.filter((b) => b.name === wanted);
+      if (!matches.length) { missing.push(wanted); continue; }
+      for (const b of matches) {
+        const list = isFn(b.folder, 'GetClipList') ? (await b.folder.GetClipList()) || [] : [];
+        for (const item of list) {
+          const info = await clipInfo(item);
+          if (seen.has(info.clipId)) continue;
+          seen.add(info.clipId);
+          clips.push({ ...info, bin: b.name, binPath: b.path, meta: await clipMeta(item) });
+        }
+      }
+    }
+    return { clips, missing };
+  }
+
+  // clips: [{id,name,fps,durationFrames,startTcFrames,meta}] -> gruppi (vedi groups.js)
+  async function detectGroups(clips) {
+    return detectGroupsPure(clips || []);
+  }
+
+  async function getClipMediaPath(clipId) {
+    const item = await findItem(clipId);
+    if (!item) return { ok: false, reason: 'clip non trovata nel Media Pool' };
+    const prop = async (k) => { try { const v = await item.GetClipProperty(k); return v === undefined || v === '' ? null : v; } catch { return null; } };
+    const path = await prop('File Path');
+    if (!path) return { ok: false, reason: 'proprieta\' File Path non disponibile per questa clip (clip generata o offline?)' };
+    return { ok: true, path: String(path), codec: await prop('Video Codec'), fps: num(await prop('FPS')) };
+  }
+
+  // Primo tentativo: MediaPoolItem.ExportFrame(frame, percorso). Firma non verificata: niente eccezioni.
+  // Se fallisce, {ok:false, via:'none', reason}: la UI ripiega su <video>+canvas (getClipMediaPath).
+  async function exportStill(clipId, frame, destDir) {
+    const fail = (reason) => ({ ok: false, via: 'none', reason });
+    if (!destDir) return fail('cartella di destinazione mancante');
+    const item = await findItem(clipId);
+    if (!item) return fail('clip non trovata nel Media Pool');
+    if (!isFn(item, 'ExportFrame')) return fail('ExportFrame non disponibile in questa versione di Resolve');
+    const safe = String(clipId).replace(/[^A-Za-z0-9_-]/g, '_');
+    const path = `${String(destDir).replace(/[\\/]+$/, '')}/still_${safe}_${Math.round(frame)}.png`;
+    const r = await attempt(() => item.ExportFrame(Math.round(frame), path), 'ExportFrame');
+    if (!r.ok) return fail(r.reason);
+    if (r.value === false) return fail('ExportFrame ha restituito false');
+    if (fileExists) {
+      let exists = false;
+      try { exists = !!(await fileExists(path)); } catch { /* si assume assente */ }
+      if (!exists) return fail('ExportFrame non ha creato il file');
+    }
+    return { ok: true, via: 'exportFrame', path };
+  }
+
+  // ---------------------------------------------------------------- piano di montaggio (toAppendPlan)
+  async function findTimelineByName(project, name) {
+    if (!isFn(project, 'GetTimelineCount') || !isFn(project, 'GetTimelineByIndex')) return null;
+    const n = Number(await project.GetTimelineCount()) || 0;
+    for (let i = 1; i <= n; i++) {
+      const tl = await project.GetTimelineByIndex(i);
+      if (tl && (await tl.GetName()) === name) return tl;
+    }
+    return null;
+  }
+
+  /**
+   * @param {{clipId,startFrame,endFrame,trackIndex?,recordFrame?,mediaType?}[]} plan  fine esclusa; mediaType 1=video 2=audio
+   * @param {{timelineName?:string, withAudio?:boolean}} opts  timelineName esistente => riusata; withAudio:false scarta mediaType 2
+   * @returns {{ok, timelineName, itemsAdded, tracksCreated, skipped:[{clipId,reason}], reason?}}
+   */
+  async function executeAppendPlan(plan, { timelineName, withAudio = true } = {}) {
+    const skipped = [];
+    const base = { timelineName: null, itemsAdded: 0, tracksCreated: 0, skipped };
+    if (!Array.isArray(plan) || plan.length === 0) return { ok: false, ...base, reason: 'piano di montaggio vuoto' };
+    const entries = [];
+    for (const e of plan) {
+      const mediaType = e.mediaType ?? 1;
+      const trackIndex = e.trackIndex ?? 1;
+      if (mediaType !== 1 && mediaType !== 2) { skipped.push({ clipId: e.clipId, reason: `mediaType non valido (${mediaType})` }); continue; }
+      if (mediaType === 2 && !withAudio) continue;
+      if (!Number.isInteger(trackIndex) || trackIndex < 1) { skipped.push({ clipId: e.clipId, reason: `trackIndex non valido (${trackIndex})` }); continue; }
+      if (!(e.endFrame > e.startFrame)) { skipped.push({ clipId: e.clipId, reason: 'intervallo vuoto' }); continue; }
+      entries.push({ ...e, mediaType, trackIndex });
+    }
+    if (entries.length === 0) return { ok: false, ...base, reason: 'nessun elemento da montare' };
+
+    const project = await getProject();
+    if (!project) return { ok: false, ...base, reason: 'Nessun progetto aperto in Resolve' };
+    const mp = await getMediaPool();
+    let tl = null;
+    let name = timelineName || null;
+    if (name) {
+      tl = await findTimelineByName(project, name);
+      if (tl && isFn(project, 'SetCurrentTimeline')) {
+        const r = await attempt(() => project.SetCurrentTimeline(tl), 'SetCurrentTimeline');
+        if (!r.ok || r.value === false) return { ok: false, ...base, timelineName: name, reason: r.reason || 'SetCurrentTimeline ha restituito false' };
+      }
+    }
+    if (!tl) {
+      const baseName = name || 'ContinuityEdit';
+      for (let n = 1; n <= 20 && !tl; n++) {
+        const candidate = n === 1 ? baseName : `${baseName} ${n}`;
+        tl = await mp.CreateEmptyTimeline(candidate);
+        if (tl) name = candidate;
+      }
+      if (!tl) return { ok: false, ...base, reason: 'CreateEmptyTimeline non riuscita' };
+    }
+    base.timelineName = name;
+
+    // livelli: AddTrack finche' ce ne sono abbastanza
+    let tracksCreated = 0;
+    const available = { video: 1, audio: 1 };
+    const trackErr = {};
+    for (const [type, mt] of [['video', 1], ['audio', 2]]) {
+      const need = Math.max(0, ...entries.filter((e) => e.mediaType === mt).map((e) => e.trackIndex));
+      if (!need) continue;
+      if (isFn(tl, 'GetTrackCount')) {
+        const c = await attempt(() => tl.GetTrackCount(type), 'GetTrackCount');
+        if (c.ok && num(c.value) !== null) available[type] = Math.max(1, num(c.value));
+      }
+      while (available[type] < need) {
+        if (!isFn(tl, 'AddTrack')) { trackErr[type] = 'AddTrack non disponibile in questa versione di Resolve'; break; }
+        const r = await attempt(() => tl.AddTrack(type), 'AddTrack');
+        if (!r.ok || r.value === false) { trackErr[type] = r.reason || 'AddTrack ha restituito false'; break; }
+        available[type]++;
+        tracksCreated++;
+      }
+    }
+
+    const cache = new Map();
+    let itemsAdded = 0;
+    for (const e of entries) {
+      const type = e.mediaType === 2 ? 'audio' : 'video';
+      if (e.trackIndex > available[type]) {
+        skipped.push({ clipId: e.clipId, reason: `livello ${type === 'video' ? 'V' : 'A'}${e.trackIndex} non disponibile: ${trackErr[type] || 'creazione non riuscita'}` });
+        continue;
+      }
+      if (!cache.has(e.clipId)) cache.set(e.clipId, await findItem(e.clipId));
+      const item = cache.get(e.clipId);
+      if (!item) { skipped.push({ clipId: e.clipId, reason: 'clip non trovata nel Media Pool' }); continue; }
+      const info = { mediaPoolItem: item, startFrame: e.startFrame, endFrame: e.endFrame, trackIndex: e.trackIndex, mediaType: e.mediaType };
+      if (Number.isFinite(e.recordFrame)) info.recordFrame = e.recordFrame;
+      const r = await attempt(() => mp.AppendToTimeline([info]), 'AppendToTimeline');
+      const added = r.ok ? (Array.isArray(r.value) ? r.value.length : (r.value ? 1 : 0)) : 0;
+      if (added) itemsAdded += added;
+      else skipped.push({ clipId: e.clipId, reason: r.reason || 'AppendToTimeline non ha aggiunto nulla' });
+    }
+    const out = { ok: itemsAdded > 0, timelineName: name, itemsAdded, tracksCreated, skipped };
+    if (!out.ok) out.reason = 'AppendToTimeline non ha aggiunto nulla';
+    return out;
+  }
+
   // ---------------------------------------------------------------- marker
   // markers: [{frame,color?,name?,note?,duration?,customData}]; rimuove prima i marker 'ce:' preesistenti della clip.
   async function writeMarkers(clipId, markers) {
@@ -373,6 +571,23 @@ export function createBridge(resolveOrGetter, { lazy = false } = {}) {
         };
       });
       await step('playheadSourceFrame', () => playheadSourceFrame(id));
+      await step('clipMetadata', async () => {
+        const props = {};
+        for (const k of ['Scene', 'Shot', 'Take', 'Camera #', 'Angle', 'File Path', 'Video Codec']) {
+          const r = await attempt(() => item.GetClipProperty(k), 'GetClipProperty');
+          props[k] = r.ok ? (r.value === undefined || r.value === '' ? '(vuoto)' : r.value) : r.reason;
+        }
+        return { ok: true, props, note: 'proprieta\' vuote = non impostate nei metadati della clip' };
+      });
+      await step('exportFrame', async () => {
+        const has = { ExportFrame: isFn(item, 'ExportFrame'), ExportThumbnails: isFn(item, 'ExportThumbnails') };
+        if (!has.ExportFrame && !has.ExportThumbnails) return { ok: false, has, reason: 'ExportFrame/ExportThumbnails assenti' };
+        if (!tmpDir) return { ok: has.ExportFrame, has, note: 'solo esistenza: nessuna cartella temporanea per la prova' };
+        const r = await exportStill(id, 1, tmpDir);
+        let fileOk = null;
+        if (r.ok && fileExists) { try { fileOk = !!(await fileExists(r.path)); } catch { fileOk = false; } }
+        return { ok: r.ok, has, result: r, fileOk, note: 'verificare a mano che il file sia un PNG valido (firma ed estensione non documentate)' };
+      });
     } else {
       steps.push({ name: 'selezione', ok: false, detail: { reason: 'nessuna clip selezionata nel Media Pool: selezionane una e rilancia per provare marker, mark in/out e trascrizione' } });
     }
@@ -382,6 +597,11 @@ export function createBridge(resolveOrGetter, { lazy = false } = {}) {
       const r = await attempt(() => tl.GetCurrentTimecode(), 'GetCurrentTimecode');
       return { ok: r.ok, value: r.ok ? r.value : undefined, reason: r.reason };
     });
+    await step('binTree', async () => {
+      const bins = await listBins();
+      return { ok: true, count: bins.length, sample: bins.slice(0, 5) };
+    });
+    let ext = null;
     await step('timelineTemporanea', async () => {
       const m = await getMediaPool();
       const tl = await m.CreateEmptyTimeline(`ce-diag-${Date.now()}`);
@@ -391,10 +611,23 @@ export function createBridge(resolveOrGetter, { lazy = false } = {}) {
         const r = await attempt(() => m.AppendToTimeline([{ mediaPoolItem: item, startFrame: 0, endFrame: 5 }]), 'AppendToTimeline');
         appended = r.ok ? (Array.isArray(r.value) ? r.value.length : !!r.value) : r.reason;
       }
+      // contratto v2: AddTrack, AppendToTimeline con trackIndex/recordFrame/mediaType, CreateMulticamClip (solo esistenza)
+      ext = { hasCreateMulticamClip: isFn(m, 'CreateMulticamClip') };
+      ext.addTrack = isFn(tl, 'AddTrack') ? await attempt(() => tl.AddTrack('video'), 'AddTrack') : { ok: false, reason: 'AddTrack assente' };
+      if (ext.addTrack.ok && ext.addTrack.value === false) ext.addTrack = { ok: false, reason: 'AddTrack ha restituito false' };
+      if (item) {
+        const r = await attempt(() => m.AppendToTimeline([{ mediaPoolItem: item, startFrame: 0, endFrame: 5, trackIndex: ext.addTrack.ok ? 2 : 1, recordFrame: 0, mediaType: 1 }]), 'AppendToTimeline(trackIndex/recordFrame/mediaType)');
+        ext.appendExt = r.ok ? { ok: Array.isArray(r.value) ? r.value.length > 0 : !!r.value } : r;
+      } else ext.appendExt = { ok: false, reason: 'nessuna clip selezionata per la prova' };
       let deleted = false;
       if (isFn(m, 'DeleteTimelines')) deleted = !!(await attempt(() => m.DeleteTimelines([tl]), 'DeleteTimelines')).value;
       return { ok: true, appended, deleted, note: deleted ? undefined : 'timeline di prova NON eliminata: rimuoverla a mano' };
     });
+    if (ext) {
+      steps.push({ name: 'addTrack', ok: ext.addTrack.ok, detail: ext.addTrack });
+      steps.push({ name: 'appendTrackRecordMediaType', ok: ext.appendExt.ok, detail: ext.appendExt });
+      steps.push({ name: 'createMulticamClip', ok: true, detail: { exists: ext.hasCreateMulticamClip, note: 'sola esistenza, non invocata' } });
+    }
     void mpInfo;
     return { ok: steps.every((s) => s.ok), at: new Date().toISOString(), steps };
   }
@@ -402,5 +635,6 @@ export function createBridge(resolveOrGetter, { lazy = false } = {}) {
   return {
     getEnv, getSelectedClips, getClip, transcribe, status, getTranscription, previewLine,
     assemble, writeMarkers, playheadSourceFrame, runDiagnostics,
+    listBins, loadBins, detectGroups, getClipMediaPath, exportStill, executeAppendPlan,
   };
 }
