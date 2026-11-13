@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no" ?>
+<FinalDraft DocumentType="Script" Template="No" Version="3">
+  <Content>
+    <Paragraph Type="Action">
+      <Text>Un corridoio senza scena iniziale.</Text>
+    </Paragraph>
+    <Paragraph Type="Character">
+      <Text>GIOVANNA</Text>
+    </Paragraph>
+    <Paragraph Type="Dialogue">
+      <Text>Aspetta!</Text>
+    </Paragraph>
+    <Paragraph Type="Scene Heading">
+      <Text>INT. SALA PROVE - GIORNO</Text>
+    </Paragraph>
+    <Paragraph>
+      <DualDialogue>
+        <Paragraph Type="Character">
+          <Text>TEODORO</Text>
+        </Paragraph>
+        <Paragraph Type="Dialogue">
+          <Text RevisionID="1">Io dico di sì.</Text>
+        </Paragraph>
+        <Paragraph Type="Character">
+          <Text>MARTINA</Text>
+        </Paragraph>
+        <Paragraph Type="Dialogue">
+          <Text RevisionID="2">Io dico di no.</Text>
+        </Paragraph>
+      </DualDialogue>
+    </Paragraph>
+    <Paragraph Type="Character">
+      <Text>TEODORO (O.S.)</Text>
+    </Paragraph>
+    <Paragraph Type="Dialogue">
+      <Text>Va bene, </Text>
+      <Text Style="Underline">decidiamo</Text>
+      <Text> domani.</Text>
+    </Paragraph>
+  </Content>
+</FinalDraft>
