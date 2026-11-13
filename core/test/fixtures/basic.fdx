@@ -1,0 +1,58 @@
+﻿<?xml version="1.0" encoding="UTF-8" standalone="no" ?>
+<FinalDraft DocumentType="Script" Template="No" Version="5">
+  <Content>
+    <Paragraph Type="Action">
+      <Text>Buio. Si sente solo il vento.</Text>
+    </Paragraph>
+    <Paragraph Type="Scene Heading">
+      <SceneProperties Length="1/8" Page="1" Title="La cantina">
+        <SceneArcBeats/>
+      </SceneProperties>
+      <Text>INT. CANTINA DI CASA ROSSETTI - NOTTE</Text>
+    </Paragraph>
+    <Paragraph Type="Action">
+      <Text>Ludovica scende le scale con una </Text>
+      <Text Style="Italic">torcia</Text>
+      <Text> in mano.</Text>
+    </Paragraph>
+    <Paragraph Type="Character">
+      <Text>Ludovica (V.O.)</Text>
+    </Paragraph>
+    <Paragraph Type="Dialogue">
+      <Text>Non c&apos;è nessuno, vero?</Text>
+    </Paragraph>
+    <Paragraph Type="Parenthetical">
+      <Text>(sottovoce)</Text>
+    </Paragraph>
+    <Paragraph Type="Dialogue">
+      <Text>Dimmi che &quot;lui&quot; non è qui &amp; che &#232; tutto a posto.</Text>
+    </Paragraph>
+    <Paragraph Type="Paragraph-vuoto-sconosciuto">
+      <Text></Text>
+    </Paragraph>
+    <Paragraph Type="Character">
+      <Text>osvaldo (CONT'D)</Text>
+    </Paragraph>
+    <Paragraph Type="Dialogue">
+      <Text>Siamo   soli.</Text>
+    </Paragraph>
+    <Paragraph Type="Dialogue">
+      <Text Style="Bold">Per ora.</Text>
+    </Paragraph>
+    <Paragraph Type="Transition">
+      <Text>TAGLIO A:</Text>
+    </Paragraph>
+    <Paragraph Type="General">
+      <Text>Nota generale.</Text>
+    </Paragraph>
+    <Paragraph Type="Scene Heading">
+      <Text>EST. GIARDINO - ALBA</Text>
+    </Paragraph>
+    <Paragraph Type="Action">
+      <Text></Text>
+    </Paragraph>
+    <Paragraph Type="Action">
+      <Text>Rugiada sull&apos;erba.</Text>
+    </Paragraph>
+  </Content>
+</FinalDraft>
