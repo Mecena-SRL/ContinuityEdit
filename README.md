@@ -32,3 +32,12 @@ Struttura:
 ## Licenza e autori
 
 GNU GPL v3 o successiva (`LICENSE`). Copyright (C) 2026 Ivan Mazzone e Claude (Anthropic). Vedi `AUTHORS.md` e `NOTICE.md`.
+
+## Installazione rapida (pacchetto ZIP)
+Se non hai il `.dmg`, costruisci il pacchetto da qualunque computer con Node.js (macOS o Linux):
+
+```bash
+npm ci && scripts/build-zip.sh
+```
+
+Esce `dist/ContinuityEdit-<versione>-mac.zip`: sul Mac decomprimilo, chiudi Resolve, doppio click su **Installa ContinuityEdit.command** (se macOS lo blocca: tasto destro > Apri) e poi apri *Workspace > Workflow Integrations > ContinuityEdit* in DaVinci Resolve Studio.

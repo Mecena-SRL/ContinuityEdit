@@ -7,6 +7,7 @@ Prima versione pubblica.
 - Plugin Workflow Integration per DaVinci Resolve Studio (macOS) in stile ScriptSync.
 - Import sceneggiatura FDX e PDF, allineamento automatico con le trascrizioni di Resolve, ancore manuali, copertura dei take per riga.
 - Anteprima riga, assemblaggio timeline, scrittura marker.
+- Pacchetto ZIP con installatore da doppio click (`scripts/build-zip.sh`), costruibile anche da Linux.
 - Installer `.dmg` non firmato (`Installa ContinuityEdit.app`), guida utente in italiano, icona.
 - Licenza GNU GPL v3 o successiva.
 - Limiti noti: nessun controllo del visore sorgente, nessuna commutazione multicam live.
