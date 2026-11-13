@@ -9,7 +9,7 @@ const tcOf = (frames, fps) => {
 };
 
 export class FakeItem {
-  constructor({ id, name, fps = 25, frames = 1000, startTc = '01:00:00:00', transcription = null }) {
+  constructor({ id, name, fps = 25, frames = 1000, startTc = '01:00:00:00', transcription = null, props = {}, exportFrame = 'ok' }) {
     this.id = id; this.name = name; this.fps = fps; this.frames = frames; this.startTc = startTc;
     this.markers = {};
     this.transcription = transcription;
@@ -17,6 +17,17 @@ export class FakeItem {
     this.markInOut = null;
     this.calls = [];
     this.failMarkInOut = false;
+    this.props = props; // Scene, Shot, Take, 'Camera #', Angle, 'File Path', 'Video Codec'...
+    this.exportFrame = exportFrame; // 'ok' | 'false' | 'throw' | 'absent' | 'nofile'
+    this.exported = [];
+    if (exportFrame === 'absent') this.ExportFrame = undefined;
+  }
+  async ExportFrame(frame, path) {
+    this.calls.push(['ExportFrame', frame, path]);
+    if (this.exportFrame === 'throw') throw new Error('firma errata');
+    if (this.exportFrame === 'false') return false;
+    if (this.exportFrame !== 'nofile') this.exported.push(path);
+    return true;
   }
   async GetUniqueId() { return this.id; }
   async GetName() { return this.name; }
@@ -26,7 +37,7 @@ export class FakeItem {
       case 'Frames': return String(this.frames);
       case 'Duration': return tcOf(this.frames, this.fps);
       case 'Start TC': return this.startTc;
-      default: return '';
+      default: return this.props[k] ?? '';
     }
   }
   async GetMarkers() { return structuredClone(this.markers); }
@@ -58,16 +69,18 @@ export class FakeTimelineItem {
 }
 
 export class FakeTimeline {
-  constructor(name, fps = 25) { this.name = name; this.fps = fps; this.items = []; this.tc = '01:00:00:00'; this.noTc = false; }
+  constructor(name, fps = 25) { this.name = name; this.fps = fps; this.items = []; this.tc = '01:00:00:00'; this.noTc = false; this.tracks = { video: 1, audio: 1 }; this.noAddTrack = false; }
+  async AddTrack(type) { if (this.noAddTrack) return false; if (!(type in this.tracks)) return false; this.tracks[type]++; return true; }
   async GetName() { return this.name; }
   async GetSetting(k) { return k === 'timelineFrameRate' ? String(this.fps) : ''; }
   async GetCurrentTimecode() { if (this.noTc) throw new Error('non supportata'); return this.tc; }
-  async GetTrackCount() { return 1; }
+  async GetTrackCount(type = 'video') { return this.tracks[type] ?? 0; }
   async GetItemListInTrack() { return this.items; }
 }
 
 class FakeFolder {
-  constructor(items = [], subs = []) { this.items = items; this.subs = subs; }
+  constructor(items = [], subs = [], name = undefined) { this.items = items; this.subs = subs; this.name = name; if (name === undefined) this.GetName = undefined; }
+  async GetName() { return this.name; }
   async GetClipList() { return this.items; }
   async GetSubFolderList() { return this.subs; }
 }
@@ -87,11 +100,19 @@ class FakeMediaPool {
   }
   async AppendToTimeline(infos) {
     const tl = this.res.currentTimeline;
-    this.res.appended.push(structuredClone(infos.map((i) => ({ id: i.mediaPoolItem.id, startFrame: i.startFrame, endFrame: i.endFrame }))));
+    if (this.res.failAppend) return false;
+    // i campi trackIndex/recordFrame/mediaType compaiono solo se passati (i test esistenti confrontano oggetti esatti)
+    this.res.appended.push(structuredClone(infos.map((i) => {
+      const o = { id: i.mediaPoolItem.id, startFrame: i.startFrame, endFrame: i.endFrame };
+      for (const k of ['trackIndex', 'recordFrame', 'mediaType']) if (i[k] !== undefined) o[k] = i[k];
+      return o;
+    })));
     let pos = 90000;
     return infos.map((i) => {
       const len = i.endFrame - i.startFrame;
-      const it = new FakeTimelineItem(i.mediaPoolItem, pos, pos + len, i.startFrame);
+      const at = i.recordFrame ?? pos;
+      const it = new FakeTimelineItem(i.mediaPoolItem, at, at + len, i.startFrame);
+      it.trackIndex = i.trackIndex ?? 1; it.mediaType = i.mediaType;
       pos += len;
       tl.items.push(it);
       return it;
@@ -100,15 +121,28 @@ class FakeMediaPool {
   async DeleteTimelines(list) { this.res.timelines = this.res.timelines.filter((t) => !list.includes(t)); return true; }
 }
 
-// items: [{id,name,fps,frames,startTc,transcription}]
-export function makeFakeResolve({ items = [], projectName = 'Progetto di prova', fps = 25 } = {}) {
+// items: [{id,name,fps,frames,startTc,transcription,props,exportFrame}]
+// bins (alternativo a items): [{name, items:[...], subs:[bin...]}] -> Media Pool con bin annidati con nome.
+export function makeFakeResolve({ items = [], bins = null, projectName = 'Progetto di prova', fps = 25 } = {}) {
   const clips = items.map((i) => new FakeItem(i));
-  const res = { root: new FakeFolder([], [new FakeFolder(clips)]), timelines: [], currentTimeline: null, appended: [], fps, clips };
+  let root;
+  if (bins) {
+    const build = (b) => {
+      const its = (b.items || []).map((i) => new FakeItem(i));
+      clips.push(...its);
+      return new FakeFolder(its, (b.subs || []).map(build), b.name);
+    };
+    root = new FakeFolder([], bins.map(build), 'Master');
+  } else root = new FakeFolder([], [new FakeFolder(clips)]);
+  const res = { root, timelines: [], currentTimeline: null, appended: [], fps, clips, failAppend: false };
   const mp = new FakeMediaPool(res);
   const project = {
     GetName: async () => projectName,
     GetMediaPool: async () => mp,
     GetCurrentTimeline: async () => res.currentTimeline,
+    GetTimelineCount: async () => res.timelines.length,
+    GetTimelineByIndex: async (i) => res.timelines[i - 1] ?? null,
+    SetCurrentTimeline: async (tl) => { if (!res.timelines.includes(tl)) return false; res.currentTimeline = tl; return true; },
     GetSetting: async () => String(fps),
   };
   const resolve = {

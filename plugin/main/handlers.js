@@ -11,14 +11,40 @@
 //   readFile: async (path) => Buffer
 //   diagPath: string               // dove scrivere la diagnostica
 //   writeFile: async (path, text)
+//   // estensioni v2 (tutte opzionali):
+//   stillsDir: string|(async()=>string)   // dove salvare gli still esportati da Resolve
+//   mkdir: async (dir)                    // crea la cartella (ricorsiva)
+//   showSaveDialog: async ({suggestedName, filters}) => path|null
+//   writeBinary: async (path, Buffer)
 // }
 // Errori: Error con messaggio italiano. Le azioni Resolve "non riuscite" restituiscono {ok:false, reason}.
+
+// ---------------------------------------------------------------------------------------------------------
+// Metodi del contratto v2 (docs/PLUGIN_API.md) cablati qui: listBins, loadBins, detectGroups, setTakeGroup,
+// getClipMediaPath, board.captureStill, saveFile, sequence.assemble (accetta un piano gia' calcolato).
+//
+// RESTANO DA CABLARE quando arrivera' il core-ext (modelli puri in core/src/sequence, core/src/board,
+// core/src/script/edit.js, marks/undo in core/src/sync). Per ciascuno: aggiungere il nome a METHOD_NAMES,
+// a METHODS di plugin/preload.js (i nomi con '.' diventano oggetti annidati: window.ce.sequence.fromLines)
+// e un handler `h['nome']` che muta tramite mutate() (autosave + 'ce:changed'):
+//   - editScript({op:'setType'|'setCharacter'|'retypeSelection'|'split'|'merge', ...}) -> state  (applyScriptEdit)
+//   - undo() / redo()                                    (cronologia di progetto, max 50)
+//   - setMark({takeId, lineId|null, rating?, grade?, tags?}), setGradePalette(list)
+//   - sequence.fromLines(lineIds, opts), sequence.addItem(item), sequence.moveItem(id,{index?,track?}),
+//     sequence.trimItem(id,{startFrame,endFrame}), sequence.removeItem(id),
+//     sequence.directorCut({groupId, switches, range, layered})
+//   - sequence.assemble({timelineName, layered?, withAudio?}) SENZA piano: calcolare il piano con
+//     toAppendPlan(project.sequence, ...) e passarlo a bridge.executeAppendPlan (oggi lo fa solo con {plan}).
+//   - board.addItem, board.moveItem, board.resizeItem, board.setCaption, board.removeItem, board.link,
+//     board.toSequence({order, ids, holdFrames})
+//   - setTakeGroup oggi assegna solo take.groupId/angle: passare dal modello ufficiale (con undo/marks).
+// ---------------------------------------------------------------------------------------------------------
 
 const SYNC_TYPES = new Set(['dialogue', 'action']);
 const MARKER_COLOR = { start: 'Green', end: 'Red', point: 'Blue' };
 
 function createHandlers(deps) {
-  const { core, bridge, state, persist, notify = () => {}, pickFile, readFile, writeFile, diagPath } = deps;
+  const { core, bridge, state, persist, notify = () => {}, pickFile, readFile, writeFile, diagPath, stillsDir, mkdir, showSaveDialog, writeBinary } = deps;
   const { sync } = core;
 
   async function projectName() {
@@ -214,6 +240,96 @@ function createHandlers(deps) {
     return { ok: r.ok, count: r.count, ...(r.reason ? { reason: r.reason } : {}), ...(r.failed?.length ? { failed: r.failed } : {}) };
   };
 
+  // ----- estensioni v2: bin, gruppi, still, piano di montaggio
+  h.listBins = () => bridge.listBins();
+
+  // Carica i bin e registra ogni clip come take (una sola volta per clip). Ritorna le clip con bin/meta/takeId.
+  h.loadBins = async (names) => {
+    if (!Array.isArray(names) || names.length === 0) throw new Error('Nessun bin selezionato');
+    state.need();
+    const { clips, missing } = await bridge.loadBins(names);
+    if (clips.length === 0) throw new Error(missing.length ? `Bin non trovati: ${missing.join(', ')}` : 'I bin selezionati non contengono clip');
+    return mutate(async (p) => {
+      const out = [];
+      for (const c of clips) {
+        let take = p.takes.find((t) => t.clipId === c.clipId);
+        if (!take) {
+          if (!(c.fps > 0) || !(c.durationFrames > 0)) { out.push({ ...c, takeId: null, reason: 'fps o durata non leggibili' }); continue; }
+          sync.addClip(p, c.clipId, { fps: c.fps, durationFrames: c.durationFrames, startTcFrames: c.startTcFrames, name: c.name });
+          take = sync.addTake(p, { clipId: c.clipId });
+        }
+        take.bin = c.bin;
+        take.meta = { scene: c.meta.scene, shot: c.meta.shot, take: c.meta.take, camera: c.meta.camera };
+        if (c.meta.angle && !take.angle) take.angle = c.meta.angle;
+        out.push({ ...c, takeId: take.id });
+      }
+      return out;
+    });
+  };
+
+  // Euristiche sui take registrati; non modifica il progetto (la UI conferma poi con setTakeGroup).
+  h.detectGroups = async () => {
+    const p = state.need();
+    const byClip = new Map();
+    const descr = [];
+    for (const t of p.takes) {
+      const clip = p.clips[t.clipId] || {};
+      byClip.set(t.id, t);
+      descr.push({ id: t.id, name: clip.name || t.clipId, fps: clip.fps, durationFrames: clip.durationFrames, startTcFrames: clip.startTcFrames, meta: { ...(t.meta || {}), angle: t.angle ?? null } });
+    }
+    const groups = await bridge.detectGroups(descr);
+    return groups.map(({ groupId, label, ids, reason, angles }) => ({ groupId, label, takeIds: ids, reason, angles }));
+  };
+
+  h.setTakeGroup = (takeId, groupId, angle) => mutate(async (p) => {
+    const t = takeOrThrow(p, takeId);
+    t.groupId = groupId ?? null;
+    t.angle = angle ?? null;
+    return true;
+  });
+
+  h.getClipMediaPath = async (takeId) => {
+    const p = state.need();
+    const take = takeOrThrow(p, takeId);
+    const r = await bridge.getClipMediaPath(take.clipId);
+    return r.ok ? { path: r.path, codec: r.codec, fps: r.fps } : { ok: false, reason: r.reason };
+  };
+
+  h['board.captureStill'] = async ({ takeId, frame } = {}) => {
+    const p = state.need();
+    const take = takeOrThrow(p, takeId);
+    if (!Number.isFinite(frame)) throw new Error('Frame mancante');
+    const clip = p.clips[take.clipId];
+    const f = Math.min(Math.max(0, Math.round(frame)), Math.max(0, clip.durationFrames - 1));
+    const dir = typeof stillsDir === 'function' ? await stillsDir() : stillsDir;
+    if (!dir) return { ok: false, via: 'none', reason: 'cartella degli still non configurata' };
+    if (mkdir) { try { await mkdir(dir); } catch (e) { return { ok: false, via: 'none', reason: `cartella degli still non creabile: ${e.message}` }; } }
+    return bridge.exportStill(take.clipId, f, dir);
+  };
+
+  h.saveFile = async ({ suggestedName, dataBase64, filters } = {}) => {
+    if (typeof dataBase64 !== 'string' || !dataBase64) throw new Error('Nessun dato da salvare');
+    if (!showSaveDialog || !writeBinary) throw new Error('Salvataggio file non configurato');
+    const path = await showSaveDialog({ suggestedName: suggestedName || 'esportazione', filters: filters || [] });
+    if (!path) return null;
+    await writeBinary(path, Buffer.from(dataBase64, 'base64'));
+    return { path };
+  };
+
+  // Esegue un piano gia' calcolato (toAppendPlan). Accetta anche voci con takeId al posto di clipId.
+  h['sequence.assemble'] = async ({ plan, timelineName, withAudio } = {}) => {
+    if (!Array.isArray(plan) || plan.length === 0) throw new Error('Piano di montaggio mancante o vuoto');
+    const p = state.project;
+    const resolved = plan.map((e) => {
+      if (e.clipId || !p) return e;
+      const t = sync.getTake(p, e.takeId);
+      return t ? { ...e, clipId: t.clipId } : e;
+    });
+    const r = await bridge.executeAppendPlan(resolved, { timelineName, withAudio });
+    notify(state.snapshot());
+    return r;
+  };
+
   h.runDiagnostics = async () => {
     const report = await bridge.runDiagnostics();
     const path = diagPath || 'continuityedit_diag.json';
@@ -230,6 +346,8 @@ const METHOD_NAMES = [
   'getTranscribeStatus', 'autoSync', 'addAnchor', 'moveAnchor', 'removeAnchor', 'anchorFromMarker',
   'anchorFromPlayhead', 'getState', 'setSelection', 'setNote', 'saveProject', 'loadProject', 'previewLine',
   'assemble', 'writeMarkers', 'runDiagnostics',
+  'listBins', 'loadBins', 'detectGroups', 'setTakeGroup', 'getClipMediaPath', 'board.captureStill', 'saveFile',
+  'sequence.assemble',
 ];
 
 module.exports = { createHandlers, METHOD_NAMES };
