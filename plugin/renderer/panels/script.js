@@ -6,6 +6,7 @@ import { LOW_CONFIDENCE } from '../viewmodel/summary.js';
 import { TYPE_OPTIONS, typeFromKey, buildEdit } from '../viewmodel/scriptedit.js';
 import { RATINGS, gradePalette } from '../viewmodel/marks.js';
 import { trackLabel } from '../viewmodel/sequence.js';
+import { shotAbbr } from '../viewmodel/shots.js';
 import { placeCamera, setMasterFor, moveHandle, nudgeCutaway, selectedCutaway, selectSeqItem } from './sequence.js';
 
 const COL_W = 20;
@@ -81,7 +82,7 @@ export function renderScript(el, ctx) {
             class: `gh-col${S.activeTakeId === c.takeId ? ' on' : ''}${c.groupId ? ' mc' : ''}`, type: 'button', style: { '--c': ctx.takeColor(c.takeId) }, tabindex: '-1',
             title: `${ctx.takeLabel(c.takeId)}${c.angle ? ` · ${c.angle}` : ''}${S.activeTakeId === c.takeId ? ' (attivo)' : ''}`, 'aria-label': `Attiva ${ctx.takeLabel(c.takeId)}${c.angle ? ` ${c.angle}` : ''}`,
             onclick: () => ctx.setActiveTake(c.takeId),
-          }, h('span', { class: 'gh-dot' }), h('span', { class: 'gh-num' }, c.angle ? c.angle.replace(/^CAM\s*/i, '') : c.col + 1)))))));
+          }, h('span', { class: 'gh-dot' }), h('span', { class: 'gh-num' }, c.angle ? c.angle.replace(/^CAM\s*/i, '') : c.col + 1), (S.d.allTakes.find((t) => t.id === c.takeId)?.shot) ? h('span', { class: 'gh-shot' }, shotAbbr(S.d.allTakes.find((t) => t.id === c.takeId).shot)) : null))))));
     }
     visible.forEach((l, vi) => nodes.push(row(ctx, l, vi, { layout, unc, focusId, project, view })));
     return nodes;

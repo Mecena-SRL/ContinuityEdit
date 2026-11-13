@@ -34,7 +34,7 @@ sudo xattr -dr com.apple.quarantine "/Library/Application Support/Blackmagic Des
 5. Vai su **Workspace > Workflow Integrations > ContinuityEdit**.
 6. **Importa la sceneggiatura** in formato FDX (Final Draft) o PDF.
 
-Poi aggiungi i take, lancia la sincronizzazione automatica e controlla la copertura per riga: le barre colorate mostrano quali take coprono ogni battuta.
+Poi aggiungi i take, lancia la sincronizzazione automatica e controlla la copertura per riga: le barre colorate mostrano quali take coprono ogni battuta. Se le clip non hanno metadati su inquadratura o camera, premi **Scansiona clip**: un foglio di contatto con tre miniature per clip ti fa classificare ogni take come Totale, Medio, Stretto o Dettaglio coi tasti 1-5 (Invio conferma le proposte automatiche) e propone i gruppi di camere dalla copertura delle stesse battute.
 
 ## Limiti noti (v0.0.1)
 

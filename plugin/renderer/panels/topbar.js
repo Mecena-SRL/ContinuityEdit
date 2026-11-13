@@ -61,6 +61,7 @@ export function renderTopbar(el, ctx) {
         env.timelineFps ? h('span', { class: 'dim' }, ` · ${env.timelineFps} fps`) : null),
       h('div', { class: 'tb-spacer' }),
       h('button', { class: 'btn', type: 'button', 'data-fk': 'help', 'aria-label': 'Guida: prima di iniziare', title: 'Prima di iniziare', onclick: () => ctx.openGuide() }, '?'),
+      h('button', { class: 'btn', type: 'button', 'data-fk': 'open-scan', title: 'Classifica i take come Totale / Medio / Stretto / Dettaglio', onclick: () => ctx.openScan() }, 'Scansiona clip'),
       h('button', { class: 'btn', type: 'button', 'data-fk': 'open-board', onclick: () => { S.boardOpen = true; ctx.rerender(['board']); } }, 'Lavagna'),
       h('button', { class: 'btn btn-primary', type: 'button', 'data-fk': 'import', disabled: S.busy.has('Importazione'), onclick: importScript },
         S.busy.has('Importazione') ? 'Importazione…' : 'Importa sceneggiatura'),

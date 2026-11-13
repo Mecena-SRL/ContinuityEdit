@@ -257,7 +257,7 @@ export function createBridge(resolveOrGetter, { lazy = false, fileExists = null,
   }
 
   // ---------------------------------------------------------------- bin, metadati, gruppi (contratto v2)
-  const META_KEYS = { scene: 'Scene', shot: 'Shot', take: 'Take', camera: 'Camera #', angle: 'Angle' };
+  const META_KEYS = { scene: 'Scene', shot: 'Shot', take: 'Take', camera: 'Camera #', angle: 'Angle', shotType: 'Shot Type' };
   async function clipMeta(item) {
     const meta = {};
     for (const [k, prop] of Object.entries(META_KEYS)) {

@@ -8,6 +8,7 @@ import { renderTakes } from './panels/takes.js';
 import { renderScript } from './panels/script.js';
 import { renderDock } from './panels/dock.js';
 import { renderBoard } from './panels/board.js';
+import { renderScan } from './panels/scan.js';
 import { openGuide } from './panels/guide.js';
 import { masterTakeId, cutawayLineIds } from './viewmodel/sequence.js';
 import { buildColumnPlan } from './viewmodel/groups.js';
@@ -22,7 +23,7 @@ const S = {
   sel: [], focusId: null, rangeAnchor: null,
   activeTakeId: null,
   sceneId: null, query: '', onlyUncovered: false, matchIndex: 0,
-  showLines: store.get('ce.showLines', true), ratingFilter: 'tutti', gradeFilter: [], boardOpen: false,
+  showLines: store.get('ce.showLines', true), ratingFilter: 'tutti', gradeFilter: [], boardOpen: false, scanOpen: false,
   tab: 'anchors',
   clips: {},          // clipId -> info da getSelectedClips (marker, transcribed, ...)
   transcribing: new Set(),
@@ -75,6 +76,7 @@ const panels = {
   script: () => renderScript(document.getElementById('script'), ctx),
   dock: () => renderDock(document.getElementById('dock'), ctx),
   board: () => renderBoard(ctx),
+  scan: () => renderScan(ctx),
 };
 let scheduled = null;
 function rerender(which = Object.keys(panels)) {
@@ -164,6 +166,7 @@ const ctx = {
   },
   setFilter(patch) { Object.assign(S, patch); if ('showLines' in patch) store.set('ce.showLines', S.showLines); rerender(['takes', 'script', 'dock']); },
   openGuide: () => openGuide(),
+  openScan() { S.scanOpen = true; rerender(['scan']); },
   scrollToLine(id) { requestAnimationFrame(() => document.querySelector(`[data-line="${CSS.escape(id)}"]`)?.scrollIntoView({ block: 'center' })); },
 };
 

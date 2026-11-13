@@ -26,7 +26,7 @@ function createState(sync) {
     const takes = p.takes.map((t) => ({
       id: t.id, clipId: t.clipId, label: t.label, name: p.clips[t.clipId]?.name ?? t.clipId,
       groupId: t.groupId ?? null, angle: t.angle ?? null, rating: t.rating ?? null, grade: t.grade ?? '',
-      tags: t.tags ?? [], bin: t.bin ?? null,
+      tags: t.tags ?? [], bin: t.bin ?? null, shot: t.shot ?? null, shotSource: t.shotSource ?? null,
     }));
     const coverage = {};
     for (const t of p.takes) coverage[t.id] = sync.coverageForTake(p, t.id);
