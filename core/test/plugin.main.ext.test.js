@@ -13,6 +13,7 @@ import { makeFakeResolve } from './helpers/fakeResolve.js';
 const require = createRequire(import.meta.url);
 const { createHandlers, METHOD_NAMES } = require('../../plugin/main/handlers.js');
 const { createState } = require('../../plugin/main/state.js');
+const { createMediaRegistry } = require('../../plugin/main/protocol.js');
 
 const FDX = `<?xml version="1.0"?><FinalDraft DocumentType="Script" Version="1"><Content>
 <Paragraph Type="Scene Heading"><Text>INT. CUCINA - GIORNO</Text></Paragraph>
@@ -32,10 +33,11 @@ async function setup({ withScript = true } = {}) {
   const events = []; const saved = []; const mkdirs = [];
   const exported = () => f.clips.flatMap((c) => c.exported);
   const state = createState(sync);
+  const media = createMediaRegistry({ randomToken: (() => { let n = 0; return () => `tok${++n}`; })() });
   const h = createHandlers({
     core: { sync, parseResolveTranscript, alignClip, parseFdx, parsePdf },
     bridge: createBridge(f.resolve, { fileExists: (p) => exported().includes(p) }), state,
-    notify: (s) => events.push(s),
+    notify: (s) => events.push(s), media,
     readFile: async () => Buffer.from(FDX),
     writeFile: async () => {},
     diagPath: '/diag.json',
@@ -45,12 +47,12 @@ async function setup({ withScript = true } = {}) {
     writeBinary: async (p, b) => { saved.push([p, b.toString('utf8')]); },
   });
   if (withScript) await h.loadScript('/s.fdx');
-  return { h, f, events, saved, mkdirs, state };
+  return { h, f, events, saved, mkdirs, state, media };
 }
 
 test('METHOD_NAMES include i metodi v2 cablati e hanno tutti un handler', async () => {
   const { h } = await setup({ withScript: false });
-  for (const n of ['listBins', 'loadBins', 'detectGroups', 'setTakeGroup', 'getClipMediaPath', 'board.captureStill', 'saveFile', 'sequence.assemble']) {
+  for (const n of ['listBins', 'loadBins', 'detectGroups', 'setTakeGroup', 'getClipMediaPath', 'board.addStill', 'board.removeItem', 'board.refreshStillViaResolve', 'saveFile', 'sequence.assemble']) {
     assert.ok(METHOD_NAMES.includes(n), n);
     assert.equal(typeof h[n], 'function', n);
   }
@@ -106,22 +108,75 @@ test('detectGroups + setTakeGroup: gruppo per metadati, assegnamento e persisten
 test('getClipMediaPath: da takeId', async () => {
   const { h } = await setup();
   await h.loadBins(['Scena 1']);
-  assert.deepEqual(await h.getClipMediaPath('T1'), { path: '/m/a1.mov', codec: 'H.264', fps: 25 });
+  const r = await h.getClipMediaPath('T1');
+  assert.deepEqual(r, { path: '/m/a1.mov', proxyPath: null, codec: 'H.264', fps: 25, startTcFrames: 90000, url: 'ce-media://clip/tok1', proxyUrl: null });
   assert.equal((await h.getClipMediaPath('T2')).ok, false);
 });
 
-test('board.captureStill: ExportFrame ok, clamp del frame, fallimento => via none', async () => {
-  const { h, f, mkdirs } = await setup();
+test('loadBins e getSelectedClips aggiungono mediaUrl (whitelist) solo per clip con File Path', async () => {
+  const { h, f, media } = await setup();
+  const clips = await h.loadBins(['Scena 1']);
+  assert.equal(clips[0].mediaUrl, 'ce-media://clip/tok1');
+  assert.equal(clips[1].mediaUrl, null);
+  assert.equal(media.resolve(clips[0].mediaUrl), '/m/a1.mov');
+  f.mp.selected = [f.clips[0]];
+  assert.equal((await h.getSelectedClips())[0].mediaUrl, 'ce-media://clip/tok1');
+});
+
+test('getClipMediaPath: proxyPath registrato come secondo URL', async () => {
+  const { h, f, media } = await setup();
+  f.clips[1].props['File Path'] = '/m/b1.mov';
+  f.clips[1].props['Proxy Media Path'] = '/p/b1.mp4';
   await h.loadBins(['Scena 1']);
-  const r = await h['board.captureStill']({ takeId: 'T1', frame: 9999 });
-  assert.deepEqual(r, { ok: true, via: 'exportFrame', path: '/stills/proj/still_a1_499.png' });
+  const r = await h.getClipMediaPath('T2');
+  assert.equal(media.resolve(r.proxyUrl), '/p/b1.mp4');
+  assert.equal(media.resolve(r.url), '/m/b1.mov');
+});
+
+test('board.addStill: marker Cyan sulla clip + item del modello; removeItem toglie il marker', async () => {
+  const { h, f, state, events } = await setup();
+  await h.loadBins(['Scena 1']);
+  const n = events.length;
+  const r = await h['board.addStill']({ takeId: 'T1', frame: 9999, lineId: state.project.scriptDoc.lines[0].id });
+  assert.deepEqual(r, { ok: true, itemId: 'S1', markerWritten: true });
+  assert.deepEqual(f.clips[0].markers[499], { color: 'Cyan', name: 'Still', note: '', duration: 1, customData: 'ce:still:S1' });
+  assert.equal(state.project.board.items[0].frame, 499);
+  assert.equal(events.length, n + 1);
+  // frame con marker gia' presente: lo still esiste ma markerWritten false
+  const r2 = await h['board.addStill']({ takeId: 'T1', frame: 499 });
+  assert.equal(r2.itemId, 'S2');
+  assert.equal(r2.markerWritten, false);
+  assert.ok(r2.reason);
+  const rm = await h['board.removeItem']('S1');
+  assert.equal(rm.markerRemoved, true);
+  assert.deepEqual(f.clips[0].markers, {});
+  assert.deepEqual(state.project.board.items.map((i) => i.id), ['S2']);
+  await assert.rejects(() => h['board.removeItem']('S9'), /sconosciuto/);
+  await assert.rejects(() => h['board.addStill']({ takeId: 'T1' }), /Frame/);
+});
+
+test('board.removeItem: senza DeleteMarkerByCustomData ripiega sulla ricerca per customData', async () => {
+  const { h, f } = await setup();
+  await h.loadBins(['Scena 1']);
+  f.clips[0].noDeleteByCustomData = true;
+  await h['board.addStill']({ takeId: 'T1', frame: 10 });
+  assert.equal((await h['board.removeItem']('S1')).markerRemoved, true);
+  assert.deepEqual(f.clips[0].markers, {});
+});
+
+test('board.refreshStillViaResolve: ExportFrame esplicito, imagePath sull\'item; fallimento => via none', async () => {
+  const { h, state, f, mkdirs } = await setup();
+  await h.loadBins(['Scena 1']);
+  await h['board.addStill']({ takeId: 'T1', frame: 12 });
+  const r = await h['board.refreshStillViaResolve']('S1');
+  assert.deepEqual(r, { ok: true, via: 'exportFrame', path: '/stills/proj/still_a1_12.png' });
+  assert.equal(state.project.board.items[0].imagePath, r.path);
   assert.deepEqual(mkdirs, ['/stills/proj']);
   f.clips[1].exportFrame = 'false';
-  const bad = await h['board.captureStill']({ takeId: 'T2', frame: 10 });
+  await h['board.addStill']({ takeId: 'T2', frame: 5 });
+  const bad = await h['board.refreshStillViaResolve']('S2');
   assert.equal(bad.ok, false);
   assert.equal(bad.via, 'none');
-  assert.ok(bad.reason);
-  await assert.rejects(() => h['board.captureStill']({ takeId: 'T1' }), /Frame/);
 });
 
 test('saveFile: scrive base64, annullamento => null', async () => {

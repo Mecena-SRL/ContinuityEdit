@@ -12,7 +12,8 @@
 //   diagPath: string               // dove scrivere la diagnostica
 //   writeFile: async (path, text)
 //   // estensioni v2 (tutte opzionali):
-//   stillsDir: string|(async()=>string)   // dove salvare gli still esportati da Resolve
+//   media:   registro ce-media:// (plugin/main/protocol.js createMediaRegistry): whitelist dei file servibili
+//   stillsDir: string|(async()=>string)   // dove salvare gli still esportati da Resolve (solo refreshStillViaResolve)
 //   mkdir: async (dir)                    // crea la cartella (ricorsiva)
 //   showSaveDialog: async ({suggestedName, filters}) => path|null
 //   writeBinary: async (path, Buffer)
@@ -21,7 +22,7 @@
 
 // ---------------------------------------------------------------------------------------------------------
 // Metodi del contratto v2 (docs/PLUGIN_API.md) cablati qui: listBins, loadBins, detectGroups, setTakeGroup,
-// getClipMediaPath, board.captureStill, saveFile, sequence.assemble (accetta un piano gia' calcolato).
+// getClipMediaPath, board.addStill, board.removeItem, board.refreshStillViaResolve, saveFile, sequence.assemble (accetta un piano gia' calcolato).
 //
 // RESTANO DA CABLARE quando arrivera' il core-ext (modelli puri in core/src/sequence, core/src/board,
 // core/src/script/edit.js, marks/undo in core/src/sync). Per ciascuno: aggiungere il nome a METHOD_NAMES,
@@ -35,8 +36,10 @@
 //     sequence.directorCut({groupId, switches, range, layered})
 //   - sequence.assemble({timelineName, layered?, withAudio?}) SENZA piano: calcolare il piano con
 //     toAppendPlan(project.sequence, ...) e passarlo a bridge.executeAppendPlan (oggi lo fa solo con {plan}).
-//   - board.addItem, board.moveItem, board.resizeItem, board.setCaption, board.removeItem, board.link,
+//   - board.addItem, board.moveItem, board.resizeItem, board.setCaption, board.link,
 //     board.toSequence({order, ids, holdFrames})
+//   - board.addStill/removeItem oggi scrivono direttamente project.board ({items,links}, creato se manca): passare
+//     dal modello ufficiale (addStill/removeItem di core/src/board).
 //   - setTakeGroup oggi assegna solo take.groupId/angle: passare dal modello ufficiale (con undo/marks).
 // ---------------------------------------------------------------------------------------------------------
 
@@ -44,7 +47,7 @@ const SYNC_TYPES = new Set(['dialogue', 'action']);
 const MARKER_COLOR = { start: 'Green', end: 'Red', point: 'Blue' };
 
 function createHandlers(deps) {
-  const { core, bridge, state, persist, notify = () => {}, pickFile, readFile, writeFile, diagPath, stillsDir, mkdir, showSaveDialog, writeBinary } = deps;
+  const { core, bridge, state, persist, notify = () => {}, pickFile, readFile, writeFile, diagPath, stillsDir, mkdir, showSaveDialog, writeBinary, media } = deps;
   const { sync } = core;
 
   async function projectName() {
@@ -117,7 +120,24 @@ function createHandlers(deps) {
   };
 
   // ----- clip e take
-  h.getSelectedClips = () => bridge.getSelectedClips();
+  // Registra il file della clip (e il proxy) nella whitelist ce-media:// e ritorna gli URL.
+  async function mediaUrls(clipId) {
+    const r = await bridge.getClipMediaPath(clipId);
+    if (!r.ok) return { ok: false, reason: r.reason };
+    return {
+      ok: true, path: r.path, proxyPath: r.proxyPath ?? null, codec: r.codec, fps: r.fps, startTcFrames: r.startTcFrames,
+      url: media ? media.register(r.path) : null,
+      proxyUrl: media && r.proxyPath ? media.register(r.proxyPath) : null,
+    };
+  }
+  const withMediaUrl = async (clips) => {
+    for (const c of clips) {
+      try { c.mediaUrl = (await mediaUrls(c.clipId)).url ?? null; } catch { c.mediaUrl = null; }
+    }
+    return clips;
+  };
+
+  h.getSelectedClips = async () => withMediaUrl(await bridge.getSelectedClips());
 
   h.addTake = ({ clipId, label } = {}) => mutate(async (p) => {
     if (!clipId) throw new Error('clipId mancante');
@@ -248,6 +268,7 @@ function createHandlers(deps) {
     if (!Array.isArray(names) || names.length === 0) throw new Error('Nessun bin selezionato');
     state.need();
     const { clips, missing } = await bridge.loadBins(names);
+    await withMediaUrl(clips);
     if (clips.length === 0) throw new Error(missing.length ? `Bin non trovati: ${missing.join(', ')}` : 'I bin selezionati non contengono clip');
     return mutate(async (p) => {
       const out = [];
@@ -289,23 +310,60 @@ function createHandlers(deps) {
   });
 
   h.getClipMediaPath = async (takeId) => {
-    const p = state.need();
-    const take = takeOrThrow(p, takeId);
-    const r = await bridge.getClipMediaPath(take.clipId);
-    return r.ok ? { path: r.path, codec: r.codec, fps: r.fps } : { ok: false, reason: r.reason };
+    const take = takeOrThrow(state.need(), takeId);
+    const r = await mediaUrls(take.clipId);
+    if (!r.ok) return { ok: false, reason: r.reason };
+    const { ok, ...rest } = r;
+    return rest;
   };
 
-  h['board.captureStill'] = async ({ takeId, frame } = {}) => {
-    const p = state.need();
+  // ----- lavagna: still = marker Resolve + item del modello (nessun file). Modello provvisorio su project.board.
+  const boardOf = (p) => (p.board ??= { items: [], links: [] });
+  const nextStillId = (b) => `S${1 + b.items.reduce((m, i) => Math.max(m, Number(/^S(\d+)$/.exec(i.id)?.[1] || 0)), 0)}`;
+
+  h['board.addStill'] = ({ takeId, frame, lineId = null } = {}) => mutate(async (p) => {
     const take = takeOrThrow(p, takeId);
     if (!Number.isFinite(frame)) throw new Error('Frame mancante');
+    if (lineId) lineOrThrow(p, lineId);
     const clip = p.clips[take.clipId];
     const f = Math.min(Math.max(0, Math.round(frame)), Math.max(0, clip.durationFrames - 1));
+    const b = boardOf(p);
+    const id = nextStillId(b);
+    const r = await bridge.addStillMarker(take.clipId, f, id);
+    const n = b.items.length;
+    b.items.push({
+      id, type: 'still', takeId, frame: f, imagePath: null, x: (n % 4) * 340, y: Math.floor(n / 4) * 200, w: 320, h: 180,
+      z: n + 1, caption: '', lineId, markerWritten: r.ok,
+    });
+    return { ok: true, itemId: id, markerWritten: r.ok, ...(r.ok ? {} : { reason: r.reason }) };
+  });
+
+  h['board.removeItem'] = (id) => mutate(async (p) => {
+    const b = boardOf(p);
+    const it = b.items.find((x) => x.id === id);
+    if (!it) throw new Error(`Elemento della lavagna sconosciuto: ${id}`);
+    let marker = null;
+    if (it.type === 'still' && it.takeId) {
+      const take = sync.getTake(p, it.takeId);
+      if (take) marker = await bridge.removeStillMarker(take.clipId, id);
+    }
+    b.items = b.items.filter((x) => x.id !== id);
+    b.links = b.links.filter((l) => l.from !== id && l.to !== id);
+    return { ok: true, markerRemoved: marker ? marker.ok : null, ...(marker && !marker.ok ? { reason: marker.reason } : {}) };
+  });
+
+  // Esplicito e opzionale: esporta il frame con ExportFrame e lo salva come imagePath dello still.
+  h['board.refreshStillViaResolve'] = (id) => mutate(async (p) => {
+    const it = boardOf(p).items.find((x) => x.id === id && x.type === 'still');
+    if (!it) throw new Error(`Still sconosciuto: ${id}`);
+    const take = takeOrThrow(p, it.takeId);
     const dir = typeof stillsDir === 'function' ? await stillsDir() : stillsDir;
     if (!dir) return { ok: false, via: 'none', reason: 'cartella degli still non configurata' };
     if (mkdir) { try { await mkdir(dir); } catch (e) { return { ok: false, via: 'none', reason: `cartella degli still non creabile: ${e.message}` }; } }
-    return bridge.exportStill(take.clipId, f, dir);
-  };
+    const r = await bridge.exportStill(take.clipId, it.frame, dir);
+    if (r.ok) it.imagePath = r.path;
+    return r;
+  });
 
   h.saveFile = async ({ suggestedName, dataBase64, filters } = {}) => {
     if (typeof dataBase64 !== 'string' || !dataBase64) throw new Error('Nessun dato da salvare');
@@ -346,7 +404,7 @@ const METHOD_NAMES = [
   'getTranscribeStatus', 'autoSync', 'addAnchor', 'moveAnchor', 'removeAnchor', 'anchorFromMarker',
   'anchorFromPlayhead', 'getState', 'setSelection', 'setNote', 'saveProject', 'loadProject', 'previewLine',
   'assemble', 'writeMarkers', 'runDiagnostics',
-  'listBins', 'loadBins', 'detectGroups', 'setTakeGroup', 'getClipMediaPath', 'board.captureStill', 'saveFile',
+  'listBins', 'loadBins', 'detectGroups', 'setTakeGroup', 'getClipMediaPath', 'board.addStill', 'board.removeItem', 'board.refreshStillViaResolve', 'saveFile',
   'sequence.assemble',
 ];
 
