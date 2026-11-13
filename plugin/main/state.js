@@ -23,7 +23,11 @@ function createState(sync) {
       id: l.id, type: l.type, character: l.character ?? null, text: l.text, sceneId: l.sceneId ?? null,
       order: l.order, syncable: l.type === 'dialogue' || l.type === 'action',
     }));
-    const takes = p.takes.map((t) => ({ id: t.id, clipId: t.clipId, label: t.label, name: p.clips[t.clipId]?.name ?? t.clipId }));
+    const takes = p.takes.map((t) => ({
+      id: t.id, clipId: t.clipId, label: t.label, name: p.clips[t.clipId]?.name ?? t.clipId,
+      groupId: t.groupId ?? null, angle: t.angle ?? null, rating: t.rating ?? null, grade: t.grade ?? '',
+      tags: t.tags ?? [], bin: t.bin ?? null,
+    }));
     const coverage = {};
     for (const t of p.takes) coverage[t.id] = sync.coverageForTake(p, t.id);
     const bestTake = {};

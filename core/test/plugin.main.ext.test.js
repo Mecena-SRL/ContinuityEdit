@@ -347,3 +347,35 @@ test('board.*: still con marker, note, move/resize/caption/link/removeItem, toSe
   assert.equal(t.state.project.board.links.length, 0);
   await assert.rejects(() => t.h['board.moveItem']('B99', { x: 1 }), /sconosciuto/);
 });
+
+test('board.addItem: con id esistente aggiorna colore/riga/didascalia senza creare elementi nuovi', async () => {
+  const { h, state } = await setup();
+  await h.loadBins(['Scena 1']);
+  const lineId = state.project.scriptDoc.lines[0].id;
+  const note = await h['board.addItem']({ type: 'note', x: 10, y: 20, caption: 'Nota', color: '#fff' });
+  const st = await h['board.addStill']({ takeId: 'T1', frame: 10 });
+  await h['board.addItem']({ id: note.itemId, color: '#f00', caption: 'Rossa' });
+  await h['board.addItem']({ id: st.itemId, lineId });
+  assert.equal(state.project.board.items.length, 2);
+  assert.equal(state.project.board.items.find((i) => i.id === note.itemId).color, '#f00');
+  assert.equal(state.project.board.items.find((i) => i.id === note.itemId).caption, 'Rossa');
+  const still = state.project.board.items.find((i) => i.id === st.itemId);
+  assert.equal(still.lineId, lineId);
+  assert.equal(still.type, 'still');
+  await assert.rejects(() => h['board.addItem']({ id: 'XX', color: '#000' }), /sconosciuto/);
+  await assert.rejects(() => h['board.addItem']({ id: note.itemId, lineId: 'L9999' }), /sconosciuta/);
+});
+
+test('getState: view.takes porta groupId, angle, rating, grade, tags e bin', async () => {
+  const { h, state } = await setup();
+  await h.loadBins(['Scena 1']);
+  await h.setTakeGroup('T1', 'G1', 'CAM A');
+  await h.setMark({ takeId: 'T1', lineId: null, rating: 'buono', grade: 'B+', tags: ['x'] });
+  const v = (await h.getState()).view.takes.find((t) => t.id === 'T1');
+  assert.equal(v.groupId, 'G1');
+  assert.equal(v.angle, 'CAM A');
+  assert.equal(v.rating, 'buono');
+  assert.equal(v.grade, 'B+');
+  assert.deepEqual(v.tags, ['x']);
+  assert.ok('bin' in v);
+});

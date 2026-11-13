@@ -349,6 +349,18 @@ function createHandlers(deps) {
   }
 
   h['board.addItem'] = (item = {}) => mutate(async (p) => {
+    // Con `id` di un elemento esistente (nota o still) aggiorna i campi modificabili invece di crearne uno nuovo.
+    if (item.id) {
+      const it = ((p.board && p.board.items) || []).find((x) => x.id === item.id);
+      if (!it) throw new Error(`Elemento della lavagna sconosciuto "${item.id}"`);
+      if (item.lineId !== undefined) {
+        if (item.lineId !== null && !p.scriptDoc.lines.some((l) => l.id === item.lineId)) throw new Error(`Riga sconosciuta "${item.lineId}"`);
+        it.lineId = item.lineId;
+      }
+      for (const k of ['color', 'caption']) if (item[k] !== undefined) it[k] = item[k];
+      for (const k of ['x', 'y', 'w', 'h']) if (Number.isFinite(item[k])) it[k] = item[k];
+      return { itemId: it.id };
+    }
     if (item.type === 'still') throw new Error('Per gli still usa board.addStill');
     const { type, ...rest } = item;
     return { itemId: B().addNote(p, { ...boardSlot(p), ...rest }).id };
