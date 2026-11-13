@@ -1,0 +1,17 @@
+{
+  "name": "continuityedit",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "description": "ScriptSync-style script/clip sync for DaVinci Resolve Studio",
+  "scripts": {
+    "test": "node --test \"core/test/**/*.test.js\""
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "fast-xml-parser": "^5.12.0",
+    "pdfjs-dist": "^6.5.438"
+  }
+}
