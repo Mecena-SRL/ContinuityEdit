@@ -1,0 +1,20 @@
+{
+  "language": "it",
+  "segments": [
+    {"start": "01:00:00:00", "end": "01:00:02:00", "text": "(...)", "words": [{"start": "01:00:00:00", "end": "01:00:02:00", "text": "(...)"}]},
+    {"start": "01:00:02:10", "end": "01:00:05:00", "speaker": "Speaker 1", "text": " Buongiorno a tutti, l'incontro comincia.",
+     "words": [
+       {"start": "01:00:02:10", "end": "01:00:03:00", "text": " Buongiorno"},
+       {"start": "01:00:03:00", "end": "01:00:03:05", "text": " a"},
+       {"start": "01:00:03:05", "end": "01:00:03:05", "text": " tutti,"},
+       {"start": "01:00:03:10", "end": "01:00:04:00", "text": " (...)"},
+       {"start": "01:00:04:00", "end": "01:00:04:12", "text": " l'incontro"},
+       {"start": "01:00:04:12", "end": "01:00:05:00", "text": " comincia."}
+     ]},
+    {"start": "01:00:06:00", "end": "01:00:08:00", "text": " Perché no?",
+     "words": [
+       {"start": "01:00:06:00", "end": "01:00:07:00", "text": " Perché"},
+       {"start": "01:00:07:00", "end": "01:00:08:00", "text": " no?"}
+     ]}
+  ]
+}
