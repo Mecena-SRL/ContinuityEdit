@@ -1,7 +1,9 @@
 // SyncProject: stato serializzabile del sync (script + clip + take + ancore + selezione + note).
 // Tutti i frame sono interi relativi all'inizio clip; gli intervalli hanno fine ESCLUSA.
 
-export const CURRENT_VERSION = 1;
+export const CURRENT_VERSION = 2;
+export const RATINGS = ['buono', 'scarto'];
+export const DEFAULT_GRADE_PALETTE = ['B', 'B+', 'B++'];
 export const EDGES = ['start', 'end', 'point'];
 export const KINDS = ['manual', 'auto'];
 export const SYNCABLE_TYPES = ['dialogue', 'action'];
@@ -20,8 +22,15 @@ export function createProject(scriptDoc) {
     anchors: [],
     selection: {},
     notes: {},
+    marks: {},
+    gradePalette: [...DEFAULT_GRADE_PALETTE],
+    sequence: emptySequence(),
+    board: emptyBoard(),
   };
 }
+
+export const emptySequence = () => ({ id: 'SEQ1', name: 'Sequenza 1', items: [] });
+export const emptyBoard = () => ({ items: [], links: [] });
 
 export function addClip(project, clipId, { fps, durationFrames, startTcFrames = 0, name = clipId } = {}) {
   if (!clipId || typeof clipId !== 'string') throw new Error('addClip: clipId obbligatorio');
@@ -43,13 +52,98 @@ function nextId(prefix, items) {
 }
 export const nextAnchorId = (project) => nextId('A', project.anchors);
 
-export function addTake(project, { id, clipId, label } = {}) {
+function checkTakeFields(t, err) {
+  if (t.groupId != null && typeof t.groupId !== 'string') err('groupId deve essere stringa o null');
+  if (t.angle != null && typeof t.angle !== 'string') err('angle deve essere stringa o null');
+  if (t.rating != null && !RATINGS.includes(t.rating)) err(`rating "${t.rating}"`);
+  if (typeof t.grade !== 'string') err('grade deve essere una stringa');
+  if (!Array.isArray(t.tags) || t.tags.some((x) => typeof x !== 'string')) err('tags deve essere un array di stringhe');
+  if (t.bin != null && typeof t.bin !== 'string') err('bin deve essere stringa o null');
+  if (t.meta != null && typeof t.meta !== 'object') err('meta deve essere un oggetto');
+}
+
+export function addTake(project, { id, clipId, label, groupId = null, angle = null, rating = null, grade = '', tags = [], bin = null, meta } = {}) {
   if (!project.clips[clipId]) throw new Error(`addTake: clip sconosciuta "${clipId}"`);
   const takeId = id || nextId('T', project.takes);
   if (project.takes.some((t) => t.id === takeId)) throw new Error(`addTake: take "${takeId}" gia' esistente`);
-  const take = { id: takeId, clipId, label: label ?? takeId };
+  const take = { id: takeId, clipId, label: label ?? takeId, groupId, angle, rating, grade, tags: [...tags], bin };
+  if (meta) take.meta = { ...meta };
+  checkTakeFields(take, (m) => { throw new Error(`addTake: ${m}`); });
   project.takes.push(take);
   return take;
+}
+
+const cleanTags = (tags) => [...new Set((tags || []).map((x) => String(x).trim()).filter(Boolean))];
+
+// Valutazione dell'intero take (rating/grade/tags). Solo i campi presenti in `patch` cambiano.
+export function setTakeMark(project, takeId, patch = {}) {
+  const t = getTake(project, takeId);
+  if (!t) throw new Error(`setTakeMark: take sconosciuto "${takeId}"`);
+  if ('rating' in patch) {
+    if (patch.rating != null && !RATINGS.includes(patch.rating)) throw new Error(`setTakeMark: rating non valido "${patch.rating}"`);
+    t.rating = patch.rating ?? null;
+  }
+  if ('grade' in patch) t.grade = patch.grade == null ? '' : String(patch.grade);
+  if ('tags' in patch) t.tags = cleanTags(patch.tags);
+  return t;
+}
+
+export const markKey = (takeId, lineId) => `${takeId}|${lineId}`;
+
+// Valutazione per copertura (take+riga). lineId null = intero take (-> setTakeMark). Un mark vuoto viene rimosso.
+export function setMark(project, takeId, lineId, patch = {}) {
+  if (lineId == null) return setTakeMark(project, takeId, patch);
+  if (!getTake(project, takeId)) throw new Error(`setMark: take sconosciuto "${takeId}"`);
+  if (!getLine(project, lineId)) throw new Error(`setMark: riga sconosciuta "${lineId}"`);
+  if (patch.rating != null && !RATINGS.includes(patch.rating)) throw new Error(`setMark: rating non valido "${patch.rating}"`);
+  const key = markKey(takeId, lineId);
+  const m = { rating: null, grade: '', tags: [], note: '', ...(project.marks[key] || {}) };
+  if ('rating' in patch) m.rating = patch.rating ?? null;
+  if ('grade' in patch) m.grade = patch.grade == null ? '' : String(patch.grade);
+  if ('tags' in patch) m.tags = cleanTags(patch.tags);
+  if ('note' in patch) m.note = patch.note == null ? '' : String(patch.note);
+  if (!m.rating && !m.grade && !m.tags.length && !m.note) { delete project.marks[key]; return null; }
+  project.marks[key] = m;
+  return m;
+}
+
+// Rating/grade/tags efficaci per (take, riga): il mark di copertura prevale su quello del take.
+export function effectiveMark(project, takeId, lineId) {
+  const t = getTake(project, takeId);
+  const m = lineId != null ? project.marks?.[markKey(takeId, lineId)] : null;
+  return {
+    rating: m?.rating ?? t?.rating ?? null,
+    grade: m?.grade || t?.grade || '',
+    tags: [...new Set([...(t?.tags || []), ...(m?.tags || [])])],
+  };
+}
+
+export function setGradePalette(project, list) {
+  if (!Array.isArray(list) || list.some((x) => typeof x !== 'string' || !x)) throw new Error('setGradePalette: elenco di stringhe non vuote richiesto');
+  project.gradePalette = [...new Set(list)];
+  return project.gradePalette;
+}
+
+export function setTakeGroup(project, takeId, groupId, angle = null) {
+  const t = getTake(project, takeId);
+  if (!t) throw new Error(`setTakeGroup: take sconosciuto "${takeId}"`);
+  t.groupId = groupId ?? null;
+  t.angle = angle ?? null;
+  return t;
+}
+
+// Filtra i take. rating: 'buono'|'scarto'|'tutti' (default); grades: elenco di grade; groupId; bin; tags (tutti presenti).
+// Con lineId usa i mark di copertura (effectiveMark), altrimenti i campi del take.
+export function filterTakes(project, { rating = 'tutti', grades, groupId, bin, tags, lineId } = {}) {
+  return project.takes.filter((t) => {
+    const e = effectiveMark(project, t.id, lineId);
+    if (rating !== 'tutti' && e.rating !== rating) return false;
+    if (grades && !grades.includes(e.grade)) return false;
+    if (groupId !== undefined && t.groupId !== groupId) return false;
+    if (bin !== undefined && t.bin !== bin) return false;
+    if (tags && !tags.every((x) => e.tags.includes(x))) return false;
+    return true;
+  });
 }
 
 export const getTake = (project, takeId) => project.takes.find((t) => t.id === takeId) || null;
@@ -97,6 +191,16 @@ const MIGRATIONS = {
   },
 };
 
+MIGRATIONS[1] = (p) => ({
+  ...p,
+  version: 2,
+  takes: (p.takes || []).map((t) => ({ groupId: null, angle: null, rating: null, grade: '', tags: [], bin: null, ...t })),
+  marks: p.marks || {},
+  gradePalette: p.gradePalette || [...DEFAULT_GRADE_PALETTE],
+  sequence: p.sequence || emptySequence(),
+  board: p.board || emptyBoard(),
+});
+
 export function validateProject(p) {
   const err = (m) => { throw new Error(`Progetto non valido: ${m}`); };
   if (!p || typeof p !== 'object') err('non e\' un oggetto');
@@ -119,6 +223,7 @@ export function validateProject(p) {
     if (!t || typeof t.id !== 'string') err('take senza id');
     if (takeIds.has(t.id)) err(`take duplicato "${t.id}"`);
     if (!p.clips[t.clipId]) err(`take "${t.id}": clip sconosciuta "${t.clipId}"`);
+    checkTakeFields(t, (m) => err(`take "${t.id}": ${m}`));
     takeIds.add(t.id);
   }
   if (!Array.isArray(p.anchors)) err('anchors deve essere un array');
@@ -140,6 +245,29 @@ export function validateProject(p) {
   for (const k of Object.keys(p.notes || {})) {
     if (!lineIds.has(k) && !takeIds.has(k)) err(`notes: chiave sconosciuta "${k}"`);
   }
+  if (!p.marks || typeof p.marks !== 'object' || Array.isArray(p.marks)) err('marks deve essere un oggetto');
+  for (const [k, m] of Object.entries(p.marks)) {
+    const [tk, ln] = k.split('|');
+    if (!takeIds.has(tk) || !lineIds.has(ln)) err(`marks: chiave sconosciuta "${k}"`);
+    if (m.rating != null && !RATINGS.includes(m.rating)) err(`marks "${k}": rating "${m.rating}"`);
+  }
+  if (!Array.isArray(p.gradePalette) || p.gradePalette.some((x) => typeof x !== 'string')) err('gradePalette deve essere un array di stringhe');
+  if (!p.sequence || !Array.isArray(p.sequence.items)) err('sequence.items mancante');
+  const itemIds = new Set();
+  for (const it of p.sequence.items) {
+    if (!it || typeof it.id !== 'string' || itemIds.has(it.id)) err('sequence: item senza id o duplicato');
+    itemIds.add(it.id);
+    if (!takeIds.has(it.takeId)) err(`sequence item "${it.id}": take sconosciuto "${it.takeId}"`);
+    if (!isInt(it.startFrame) || !isInt(it.endFrame) || it.endFrame <= it.startFrame) err(`sequence item "${it.id}": intervallo non valido`);
+  }
+  if (!p.board || !Array.isArray(p.board.items) || !Array.isArray(p.board.links)) err('board.items/links mancanti');
+  const boardIds = new Set();
+  for (const it of p.board.items) {
+    if (!it || typeof it.id !== 'string' || boardIds.has(it.id)) err('board: item senza id o duplicato');
+    boardIds.add(it.id);
+    if (it.takeId != null && !takeIds.has(it.takeId)) err(`board item "${it.id}": take sconosciuto "${it.takeId}"`);
+  }
+  for (const l of p.board.links) if (!boardIds.has(l.from) || !boardIds.has(l.to)) err('board: link verso item sconosciuto');
   return p;
 }
 
