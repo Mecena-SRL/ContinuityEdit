@@ -4,6 +4,7 @@
   "private": true,
   "type": "module",
   "description": "ScriptSync-style script/clip sync for DaVinci Resolve Studio",
+  "license": "GPL-3.0-or-later",
   "scripts": {
     "test": "node --test \"core/test/**/*.test.js\""
   },

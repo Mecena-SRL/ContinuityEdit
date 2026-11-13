@@ -1,0 +1,35 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#2d3440"/>
+      <stop offset="1" stop-color="#14171d"/>
+    </linearGradient>
+    <clipPath id="clapTop"><rect x="600" y="690" width="260" height="62" rx="14"/></clipPath>
+  </defs>
+  <!-- quadrato arrotondato stile macOS -->
+  <rect x="100" y="100" width="824" height="824" rx="185" fill="url(#bg)"/>
+  <!-- pagina di sceneggiatura -->
+  <rect x="200" y="210" width="400" height="560" rx="28" fill="#f4f1e8"/>
+  <g fill="#2d3440">
+    <rect x="255" y="280" width="140" height="28" rx="14"/>
+    <rect x="255" y="360" width="290" height="24" rx="12" opacity=".5"/>
+    <rect x="255" y="425" width="240" height="24" rx="12" opacity=".5"/>
+    <rect x="255" y="490" width="290" height="24" rx="12" opacity=".5"/>
+    <rect x="255" y="555" width="200" height="24" rx="12" opacity=".5"/>
+    <rect x="255" y="620" width="290" height="24" rx="12" opacity=".5"/>
+  </g>
+  <!-- barre di copertura dei take -->
+  <rect x="650" y="250" width="50" height="270" rx="25" fill="#ff5c5c"/>
+  <rect x="722" y="310" width="50" height="310" rx="25" fill="#ffb02e"/>
+  <rect x="794" y="250" width="50" height="200" rx="25" fill="#38d39f"/>
+  <!-- ciak (sync) -->
+  <g transform="rotate(-7 730 770)">
+    <rect x="600" y="750" width="260" height="130" rx="22" fill="#f4f1e8"/>
+    <rect x="600" y="690" width="260" height="62" rx="14" fill="#f4f1e8"/>
+    <g clip-path="url(#clapTop)" fill="#14171d">
+      <path d="M625 690 h52 l-38 62 h-52z"/>
+      <path d="M715 690 h52 l-38 62 h-52z"/>
+      <path d="M805 690 h52 l-38 62 h-52z"/>
+    </g>
+  </g>
+</svg>
