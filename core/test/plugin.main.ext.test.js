@@ -91,7 +91,7 @@ test('detectGroups + setTakeGroup: gruppo per metadati, assegnamento e persisten
   assert.equal(groups.length, 1);
   assert.deepEqual(groups[0].takeIds, ['T1', 'T2']);
   assert.ok(groups[0].reason);
-  assert.equal(state.project.takes[0].groupId, undefined);
+  assert.ok(!state.project.takes[0].groupId); // null (modello v2) o assente
   const n = events.length;
   await h.setTakeGroup('T1', groups[0].groupId, 'CAM A');
   await h.setTakeGroup('T2', groups[0].groupId, null);
