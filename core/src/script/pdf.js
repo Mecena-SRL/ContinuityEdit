@@ -154,22 +154,67 @@ function cleanRows(allRows, pages, warnings) {
   return { rows: kept, moreOnPage };
 }
 
+const FINAL_TRANSITION_RE = /^(?:FINE|THE END|FADE OUT|FADE TO BLACK)\.?$/;
+
 /** Toglie i numeri di scena a margine (celle isolate) e segna le righe dual dialogue. */
-function splitSpecialCells(rows, cw) {
-  for (const r of rows) {
+function splitSpecialCells(inRows, cw) {
+  const rows = [];
+  for (const r of inRows) {
     r.sceneNumbers = [];
     if (r.cells.length >= 2) {
       const rest = [];
       for (const c of r.cells) {
-        if (SCENE_NUM_RE.test(c.text) && r.cells.length > 1 && (c === r.cells[0] || c === r.cells[r.cells.length - 1])) {
+        if (SCENE_NUM_RE.test(c.text) && (c === r.cells[0] || c === r.cells[r.cells.length - 1])) {
           r.sceneNumbers.push(c.text);
         } else rest.push(c);
       }
       if (rest.length) r.cells = rest;
       else r.sceneNumbers = [];
     }
-    const mid = r.pageW * 0.45;
-    r.dual = r.cells.length >= 2 && r.cells[0].x < mid && r.cells[r.cells.length - 1].x >= mid;
+    // "FINE" / "THE END" a destra sulla stessa riga di un testo: riga transition a parte
+    if (r.cells.length >= 2) {
+      const last = r.cells[r.cells.length - 1];
+      if (FINAL_TRANSITION_RE.test(last.text) && last.x - r.cells[r.cells.length - 2].x2 >= 1.5 * cw) {
+        r.cells = r.cells.slice(0, -1);
+        rows.push(r, { ...r, cells: [last], sceneNumbers: [] });
+        continue;
+      }
+    }
+    // celle separate da spazi (anche doppi) ravvicinati: stessa colonna
+    const merged = [];
+    for (const c of r.cells) {
+      const prev = merged[merged.length - 1];
+      if (prev && c.x - prev.x2 < 6 * cw) {
+        prev.text = squash(prev.text + ' ' + c.text);
+        prev.x2 = Math.max(prev.x2, c.x2);
+      } else merged.push({ ...c });
+    }
+    r.cells = merged;
+    rows.push(r);
+  }
+
+  // ancora sinistra del documento: mediana delle scene heading, altrimenti minimo
+  const heads = rows.filter((r) => SCENE_RE.test(r.cells[0].text) && isUpper(r.cells[0].text)).map((r) => r.cells[0].x);
+  const L = heads.length ? median(heads) : Math.min(...rows.map((r) => r.cells[0].x));
+  const isCue = (r) => {
+    if (r.cells.length !== 1) return false;
+    const t = r.cells[0].text;
+    return (
+      looksLikeCharacter(t) &&
+      !SCENE_RE.test(t) &&
+      !TRANSITION_RE.test(t) &&
+      r.cells[0].x > L + 6 * cw &&
+      r.cells[0].x < r.pageW * 0.7
+    );
+  };
+  const mid = (r) => r.pageW * 0.45;
+  const isCand = (r) => r.cells.length >= 2 && r.cells[0].x < mid(r) && r.cells[r.cells.length - 1].x >= mid(r);
+  const hasCues =
+    rows.some((r) => !isCand(r) && isCue(r)) ||
+    rows.some((r) => isCand(r) && r.cells.every((c) => looksLikeCharacter(c.text)));
+
+  for (const r of rows) {
+    r.dual = hasCues && isCand(r);
     if (!r.dual && r.cells.length > 1) {
       const text = r.cells.map((c) => c.text).join(' ');
       r.cells = [{ x: r.cells[0].x, x2: r.cells[r.cells.length - 1].x2, text }];
@@ -178,6 +223,7 @@ function splitSpecialCells(rows, cw) {
     r.x2 = r.cells[r.cells.length - 1].x2;
     r.text = r.cells.map((c) => c.text).join(' ');
   }
+  return rows;
 }
 
 // ------------------------------------------------------- calibrazione ----
@@ -446,14 +492,12 @@ function buildDoc(rows, cal, moreOnPage, warnings, title) {
   const handleDialogue = (text, conf) => {
     if (openDialogue) {
       extend(openDialogue, text, conf);
+    } else if (!curChar) {
+      // dialogo valido solo dopo un cue di personaggio: altrimenti e' azione
+      if (openAction && lastRow && lastRow.role !== 'character') extend(openAction, text, Math.max(conf, 0.6));
+      else openAction = push('action', text, Math.max(conf, 0.6));
     } else {
-      let c = conf;
-      if (!curChar) {
-        c = Math.min(c, 0.4);
-        if (!lines.some((l) => l._orphanWarned)) warnings.push('dialogo senza personaggio riconosciuto (battuta orfana)');
-      }
-      openDialogue = push('dialogue', text, c, { character: curChar, characterExt: curExt || undefined });
-      if (!curChar) openDialogue._orphanWarned = true;
+      openDialogue = push('dialogue', text, conf, { character: curChar, characterExt: curExt || undefined });
     }
   };
 
@@ -560,7 +604,7 @@ function buildDoc(rows, cal, moreOnPage, warnings, title) {
         break;
       }
       case 'dialogue':
-        openAction = null;
+        if (curChar) openAction = null;
         handleDialogue(r.text, conf);
         break;
       default:
@@ -578,6 +622,11 @@ function buildDoc(rows, cal, moreOnPage, warnings, title) {
     if (line.confidence < 0.6) lowConf++;
     if (line.type !== 'character' && line.type !== 'dialogue' && line.type !== 'parenthetical') line.character = null;
     if (line.type === 'dialogue') line.text = line.text.replace(/\s*\((?:CONT['’`]?D|SEGUE|CONTINUA|MORE)\)\s*$/i, '').trim();
+  }
+  if (lines.length && !lines.some((l) => l.type === 'character' || l.type === 'dialogue')) {
+    warnings.push('nessun personaggio/dialogo rilevato: sceneggiatura muta?');
+    const i = warnings.findIndex((w) => w.startsWith('nessuna indentazione rilevata'));
+    if (i >= 0) warnings.splice(i, 1);
   }
   if (lowConf) warnings.push(`${lowConf} righe a bassa confidenza (<0.6): da rivedere nell'anteprima`);
   return { title, source: 'pdf', scenes, lines };
@@ -606,10 +655,10 @@ export async function parsePdf(input) {
 
     const { rows: cleaned, moreOnPage } = cleanRows(allRows, pages, warnings);
     if (!cleaned.length) return emptyDoc([EMPTY_TEXT_WARNING]);
-    splitSpecialCells(cleaned, cw);
+    const split = splitSpecialCells(cleaned, cw);
 
     // pagine iniziali senza scene heading (frontespizio): scartate, titolo = prima riga
-    let rows = cleaned;
+    let rows = split;
     let title = '';
     const firstScenePage = rows.find((r) => !r.dual && r.cells.length && SCENE_RE.test(r.text) && isUpper(r.text));
     if (firstScenePage && firstScenePage.page > 0) {
