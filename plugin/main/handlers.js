@@ -21,26 +21,11 @@
 // Errori: Error con messaggio italiano. Le azioni Resolve "non riuscite" restituiscono {ok:false, reason}.
 
 // ---------------------------------------------------------------------------------------------------------
-// Metodi del contratto v2 (docs/PLUGIN_API.md) cablati qui: listBins, loadBins, detectGroups, setTakeGroup,
-// getClipMediaPath, board.addStill, board.removeItem, board.refreshStillViaResolve, saveFile, sequence.assemble (accetta un piano gia' calcolato).
-//
-// RESTANO DA CABLARE quando arrivera' il core-ext (modelli puri in core/src/sequence, core/src/board,
-// core/src/script/edit.js, marks/undo in core/src/sync). Per ciascuno: aggiungere il nome a METHOD_NAMES,
-// a METHODS di plugin/preload.js (i nomi con '.' diventano oggetti annidati: window.ce.sequence.fromLines)
-// e un handler `h['nome']` che muta tramite mutate() (autosave + 'ce:changed'):
-//   - editScript({op:'setType'|'setCharacter'|'retypeSelection'|'split'|'merge', ...}) -> state  (applyScriptEdit)
-//   - undo() / redo()                                    (cronologia di progetto, max 50)
-//   - setMark({takeId, lineId|null, rating?, grade?, tags?}), setGradePalette(list)
-//   - sequence.fromLines(lineIds, opts), sequence.addItem(item), sequence.moveItem(id,{index?,track?}),
-//     sequence.trimItem(id,{startFrame,endFrame}), sequence.removeItem(id),
-//     sequence.directorCut({groupId, switches, range, layered})
-//   - sequence.assemble({timelineName, layered?, withAudio?}) SENZA piano: calcolare il piano con
-//     toAppendPlan(project.sequence, ...) e passarlo a bridge.executeAppendPlan (oggi lo fa solo con {plan}).
-//   - board.addItem, board.moveItem, board.resizeItem, board.setCaption, board.link,
-//     board.toSequence({order, ids, holdFrames})
-//   - board.addStill/removeItem oggi scrivono direttamente project.board ({items,links}, creato se manca): passare
-//     dal modello ufficiale (addStill/removeItem di core/src/board).
-//   - setTakeGroup oggi assegna solo take.groupId/angle: passare dal modello ufficiale (con undo/marks).
+// Contratto v2 (docs/PLUGIN_API.md, docs/CONTRACTS.md) interamente cablato: bin/gruppi/marks (sync), editScript
+// (applyScriptEdit), undo/redo (createHistory, 50 passi), sequence.* (modello master V1 + cutaway V2..), board.*
+// (inclusi still come marker Resolve) e saveFile. Ogni mutazione passa da mutate(): snapshot per l'undo, ripristino
+// del progetto se la mutazione lancia, autosave del sidecar e 'ce:changed'.
+// Deps core usati oltre a v1: core.applyScriptEdit, core.sequence, core.board (moduli di core/src/*).
 // ---------------------------------------------------------------------------------------------------------
 
 const SYNC_TYPES = new Set(['dialogue', 'action']);
@@ -49,6 +34,7 @@ const MARKER_COLOR = { start: 'Green', end: 'Red', point: 'Blue' };
 function createHandlers(deps) {
   const { core, bridge, state, persist, notify = () => {}, pickFile, readFile, writeFile, diagPath, stillsDir, mkdir, showSaveDialog, writeBinary, media } = deps;
   const { sync } = core;
+  const history = sync.createHistory();
 
   async function projectName() {
     if (state.meta.projectName) return state.meta.projectName;
@@ -72,8 +58,19 @@ function createHandlers(deps) {
   }
 
   // Esegue una mutazione, poi salva e notifica.
+  // Atomica: se fn lancia il progetto torna com'era (ripristino in place) e la cronologia non cambia.
   async function mutate(fn) {
-    const result = await fn(state.need());
+    const p = state.need();
+    const before = structuredClone(p);
+    let result;
+    try {
+      result = await fn(p);
+    } catch (e) {
+      for (const k of Object.keys(p)) delete p[k];
+      Object.assign(p, before);
+      throw e;
+    }
+    history.push(before);
     await autosave();
     notify(state.snapshot());
     return result;
@@ -114,6 +111,7 @@ function createHandlers(deps) {
       for (const t of prev.takes) project.takes.push({ ...t });
     }
     state.setProject(project, { warnings, confidence });
+    history.clear();
     await autosave();
     notify(state.snapshot());
     return { scriptDoc: project.scriptDoc, warnings, confidence };
@@ -216,7 +214,8 @@ function createHandlers(deps) {
     if (!persist) return { loaded: false, ...state.snapshot() };
     const text = await persist.load(await projectName());
     if (text == null) return { loaded: false, ...state.snapshot() };
-    state.setProject(sync.deserialize(text)); // lancia "Progetto non valido: ..." se corrotto
+    state.setProject(sync.deserialize(text)); // migra v1->v2; lancia "Progetto non valido: ..." se corrotto
+    history.clear();
     notify(state.snapshot());
     return { loaded: true, ...state.snapshot() };
   };
@@ -277,7 +276,7 @@ function createHandlers(deps) {
         if (!take) {
           if (!(c.fps > 0) || !(c.durationFrames > 0)) { out.push({ ...c, takeId: null, reason: 'fps o durata non leggibili' }); continue; }
           sync.addClip(p, c.clipId, { fps: c.fps, durationFrames: c.durationFrames, startTcFrames: c.startTcFrames, name: c.name });
-          take = sync.addTake(p, { clipId: c.clipId });
+          take = sync.addTake(p, { clipId: c.clipId, bin: c.bin });
         }
         take.bin = c.bin;
         take.meta = { scene: c.meta.scene, shot: c.meta.shot, take: c.meta.take, camera: c.meta.camera };
@@ -302,12 +301,26 @@ function createHandlers(deps) {
     return groups.map(({ groupId, label, ids, reason, angles }) => ({ groupId, label, takeIds: ids, reason, angles }));
   };
 
-  h.setTakeGroup = (takeId, groupId, angle) => mutate(async (p) => {
-    const t = takeOrThrow(p, takeId);
-    t.groupId = groupId ?? null;
-    t.angle = angle ?? null;
-    return true;
-  });
+  h.setTakeGroup = (takeId, groupId, angle) => mutate(async (p) => { sync.setTakeGroup(p, takeId, groupId, angle ?? null); return true; });
+
+  // ----- spoglio, undo/redo, valutazione
+  h.editScript = async (edit) => {
+    await mutate(async (p) => core.applyScriptEdit(p, edit));
+    return state.snapshot();
+  };
+
+  async function swap(next) {
+    if (!next) return state.snapshot();
+    state.meta.project = next;
+    await autosave();
+    notify(state.snapshot());
+    return state.snapshot();
+  }
+  h.undo = async () => { const p = state.need(); return swap(history.undo(p)); };
+  h.redo = async () => { const p = state.need(); return swap(history.redo(p)); };
+
+  h.setMark = ({ takeId, lineId = null, ...patch } = {}) => mutate(async (p) => { sync.setMark(p, takeId, lineId ?? null, patch); return true; });
+  h.setGradePalette = (list) => mutate(async (p) => sync.setGradePalette(p, list));
 
   h.getClipMediaPath = async (takeId) => {
     const take = takeOrThrow(state.need(), takeId);
@@ -317,44 +330,54 @@ function createHandlers(deps) {
     return rest;
   };
 
-  // ----- lavagna: still = marker Resolve + item del modello (nessun file). Modello provvisorio su project.board.
-  const boardOf = (p) => (p.board ??= { items: [], links: [] });
-  const nextStillId = (b) => `S${1 + b.items.reduce((m, i) => Math.max(m, Number(/^S(\d+)$/.exec(i.id)?.[1] || 0)), 0)}`;
+  // ----- lavagna (modello core/src/board). Still = marker Resolve 'ce:still:<id>' + item; nessun file.
+  const B = () => core.board;
+  const Q = () => core.sequence;
+  const clampFrame = (p, take, frame) => Math.min(Math.max(0, Math.round(frame)), Math.max(0, p.clips[take.clipId].durationFrames - 1));
 
   h['board.addStill'] = ({ takeId, frame, lineId = null } = {}) => mutate(async (p) => {
     const take = takeOrThrow(p, takeId);
     if (!Number.isFinite(frame)) throw new Error('Frame mancante');
-    if (lineId) lineOrThrow(p, lineId);
-    const clip = p.clips[take.clipId];
-    const f = Math.min(Math.max(0, Math.round(frame)), Math.max(0, clip.durationFrames - 1));
-    const b = boardOf(p);
-    const id = nextStillId(b);
-    const r = await bridge.addStillMarker(take.clipId, f, id);
-    const n = b.items.length;
-    b.items.push({
-      id, type: 'still', takeId, frame: f, imagePath: null, x: (n % 4) * 340, y: Math.floor(n / 4) * 200, w: 320, h: 180,
-      z: n + 1, caption: '', lineId, markerWritten: r.ok,
-    });
-    return { ok: true, itemId: id, markerWritten: r.ok, ...(r.ok ? {} : { reason: r.reason }) };
+    const it = B().addStill(p, { takeId, frame: clampFrame(p, take, frame), lineId, ...boardSlot(p) });
+    const r = await bridge.addStillMarker(take.clipId, it.frame, it.id);
+    return { ok: true, itemId: it.id, markerWritten: r.ok, ...(r.ok ? {} : { reason: r.reason }) };
   });
+  // posizione iniziale a griglia (4 colonne) in base agli item gia' presenti
+  function boardSlot(p) {
+    const n = (p.board?.items || []).length;
+    return { x: (n % 4) * 170, y: Math.floor(n / 4) * 100 };
+  }
+
+  h['board.addItem'] = (item = {}) => mutate(async (p) => {
+    if (item.type === 'still') throw new Error('Per gli still usa board.addStill');
+    const { type, ...rest } = item;
+    return { itemId: B().addNote(p, { ...boardSlot(p), ...rest }).id };
+  });
+  h['board.moveItem'] = (id, pos) => mutate(async (p) => { B().moveItem(p, id, pos); return true; });
+  h['board.resizeItem'] = (id, size) => mutate(async (p) => { B().resizeItem(p, id, size); return true; });
+  h['board.setCaption'] = (id, text) => mutate(async (p) => { B().setCaption(p, id, text); return true; });
+  h['board.bringToFront'] = (id) => mutate(async (p) => { B().bringToFront(p, id); return true; });
+  h['board.link'] = (from, to) => mutate(async (p) => { B().linkItems(p, from, to); return true; });
 
   h['board.removeItem'] = (id) => mutate(async (p) => {
-    const b = boardOf(p);
-    const it = b.items.find((x) => x.id === id);
-    if (!it) throw new Error(`Elemento della lavagna sconosciuto: ${id}`);
+    const it = B().removeItem(p, id);
     let marker = null;
     if (it.type === 'still' && it.takeId) {
       const take = sync.getTake(p, it.takeId);
       if (take) marker = await bridge.removeStillMarker(take.clipId, id);
     }
-    b.items = b.items.filter((x) => x.id !== id);
-    b.links = b.links.filter((l) => l.from !== id && l.to !== id);
     return { ok: true, markerRemoved: marker ? marker.ok : null, ...(marker && !marker.ok ? { reason: marker.reason } : {}) };
+  });
+
+  h['board.toSequence'] = ({ order = 'x', ids, holdFrames } = {}) => mutate(async (p) => {
+    const opts = { order, ids };
+    if (holdFrames !== undefined) opts.holdFrames = Math.round(holdFrames);
+    return { items: B().boardToSequence(p, opts).items.length };
   });
 
   // Esplicito e opzionale: esporta il frame con ExportFrame e lo salva come imagePath dello still.
   h['board.refreshStillViaResolve'] = (id) => mutate(async (p) => {
-    const it = boardOf(p).items.find((x) => x.id === id && x.type === 'still');
+    const it = (p.board?.items || []).find((x) => x.id === id && x.type === 'still');
     if (!it) throw new Error(`Still sconosciuto: ${id}`);
     const take = takeOrThrow(p, it.takeId);
     const dir = typeof stillsDir === 'function' ? await stillsDir() : stillsDir;
@@ -365,6 +388,61 @@ function createHandlers(deps) {
     return r;
   });
 
+  // ----- sequenza (modello master V1 + cutaway V2..)
+  h['sequence.fromLines'] = (lineIds, opts = {}) => mutate(async (p) => {
+    if (!Array.isArray(lineIds) || lineIds.length === 0) throw new Error('Nessuna riga da montare');
+    const { sequence, skipped } = Q().sequenceFromLinesDetailed(p, lineIds, opts);
+    return { itemCount: sequence.items.length, skipped };
+  });
+  h['sequence.addItem'] = (spec) => mutate(async (p) => Q().addItem(p, spec));
+  h['sequence.moveItem'] = (id, pos) => mutate(async (p) => Q().moveItem(p, id, pos));
+  h['sequence.trimItem'] = (id, range) => mutate(async (p) => Q().trimItem(p, id, range));
+  h['sequence.removeItem'] = (id) => mutate(async (p) => { Q().removeItem(p, id); return true; });
+
+  // Master = un solo take continuo sulle righe date (sostituisce la sequenza). Servono le coperture del take.
+  h['sequence.setMaster'] = ({ takeId, lineIds } = {}) => mutate(async (p) => {
+    takeOrThrow(p, takeId);
+    if (!Array.isArray(lineIds) || lineIds.length === 0) throw new Error('Nessuna riga per il master');
+    const cov = sync.coverageForTake(p, takeId);
+    const picked = lineIds.map((l) => {
+      const c = cov.find((x) => x.lineId === l);
+      if (!c) throw new Error(`il take "${takeId}" non copre la riga "${l}"`);
+      return c;
+    });
+    const lineStarts = Object.fromEntries(picked.map((c) => [c.lineId, c.startFrame]));
+    const seq = Q().ensureSequence(p);
+    seq.items = [];
+    return Q().addItem(p, {
+      kind: 'line', lineIds: [...lineIds], takeId, role: 'master', track: 1, lineStarts,
+      startFrame: Math.min(...picked.map((c) => c.startFrame)), endFrame: Math.max(...picked.map((c) => c.endFrame)),
+    });
+  });
+  h['sequence.addCutaway'] = (spec) => mutate(async (p) => Q().addCutaway(p, null, spec));
+  h['sequence.trimCutaway'] = (itemId, patch) => mutate(async (p) => Q().trimCutaway(p, null, itemId, patch));
+
+  // Senza `plan` costruisce il piano dalla sequenza del progetto (toAppendPlanDetailed); con `plan` lo esegue com'e'.
+  h['sequence.assemble'] = async ({ plan, timelineName, withAudio = false } = {}) => {
+    const p = state.project;
+    let steps = plan;
+    const extraSkipped = [];
+    if (!Array.isArray(plan)) {
+      const seq = state.need().sequence;
+      if (!seq || !seq.items.length) throw new Error('Sequenza vuota: costruiscila prima di montare');
+      const d = Q().toAppendPlanDetailed(seq, { startFrame: 0, withAudio });
+      steps = d.plan;
+      for (const s of d.skipped) extraSkipped.push({ clipId: seq.items.find((i) => i.id === s.itemId)?.clipId, reason: s.reason });
+    } else if (plan.length === 0) throw new Error('Piano di montaggio mancante o vuoto');
+    const resolved = steps.map((e) => {
+      if (e.clipId || !p) return e;
+      const t = sync.getTake(p, e.takeId);
+      return t ? { ...e, clipId: t.clipId } : e;
+    });
+    const r = await bridge.executeAppendPlan(resolved, { timelineName, withAudio });
+    r.skipped = [...extraSkipped, ...(r.skipped || [])];
+    notify(state.snapshot());
+    return r;
+  };
+
   h.saveFile = async ({ suggestedName, dataBase64, filters } = {}) => {
     if (typeof dataBase64 !== 'string' || !dataBase64) throw new Error('Nessun dato da salvare');
     if (!showSaveDialog || !writeBinary) throw new Error('Salvataggio file non configurato');
@@ -372,20 +450,6 @@ function createHandlers(deps) {
     if (!path) return null;
     await writeBinary(path, Buffer.from(dataBase64, 'base64'));
     return { path };
-  };
-
-  // Esegue un piano gia' calcolato (toAppendPlan). Accetta anche voci con takeId al posto di clipId.
-  h['sequence.assemble'] = async ({ plan, timelineName, withAudio } = {}) => {
-    if (!Array.isArray(plan) || plan.length === 0) throw new Error('Piano di montaggio mancante o vuoto');
-    const p = state.project;
-    const resolved = plan.map((e) => {
-      if (e.clipId || !p) return e;
-      const t = sync.getTake(p, e.takeId);
-      return t ? { ...e, clipId: t.clipId } : e;
-    });
-    const r = await bridge.executeAppendPlan(resolved, { timelineName, withAudio });
-    notify(state.snapshot());
-    return r;
   };
 
   h.runDiagnostics = async () => {
@@ -405,7 +469,10 @@ const METHOD_NAMES = [
   'anchorFromPlayhead', 'getState', 'setSelection', 'setNote', 'saveProject', 'loadProject', 'previewLine',
   'assemble', 'writeMarkers', 'runDiagnostics',
   'listBins', 'loadBins', 'detectGroups', 'setTakeGroup', 'getClipMediaPath', 'board.addStill', 'board.removeItem', 'board.refreshStillViaResolve', 'saveFile',
-  'sequence.assemble',
+  'editScript', 'undo', 'redo', 'setMark', 'setGradePalette',
+  'sequence.fromLines', 'sequence.addItem', 'sequence.moveItem', 'sequence.trimItem', 'sequence.removeItem',
+  'sequence.setMaster', 'sequence.addCutaway', 'sequence.trimCutaway', 'sequence.assemble',
+  'board.addItem', 'board.moveItem', 'board.resizeItem', 'board.setCaption', 'board.bringToFront', 'board.link', 'board.toSequence',
 ];
 
 module.exports = { createHandlers, METHOD_NAMES };

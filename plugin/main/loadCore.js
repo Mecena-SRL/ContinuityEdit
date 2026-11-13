@@ -16,8 +16,9 @@ function findCoreSrc(baseDir) {
 async function loadCore(baseDir) {
   const src = findCoreSrc(baseDir);
   const imp = (rel) => import(pathToFileURL(path.join(src, rel)).href);
-  const [sync, transcript, align, script, bridgeMod] = await Promise.all([
+  const [sync, transcript, align, script, bridgeMod, sequence, board] = await Promise.all([
     imp('sync/index.js'), imp('transcript/parse.js'), imp('align/index.js'), imp('script/index.js'), imp('bridge/resolveBridge.js'),
+    imp('sequence/index.js'), imp('board/index.js'),
   ]);
   return {
     sync,
@@ -25,6 +26,9 @@ async function loadCore(baseDir) {
     alignClip: align.alignClip,
     parseFdx: script.parseFdx,
     parsePdf: script.parsePdf,
+    applyScriptEdit: script.applyScriptEdit,
+    sequence,
+    board,
     createBridge: bridgeMod.createBridge,
   };
 }
