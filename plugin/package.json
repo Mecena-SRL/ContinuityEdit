@@ -1,0 +1,7 @@
+{
+    "name": "com.continuityedit.plugin",
+    "version": "0.1.0",
+    "description": "ContinuityEdit - Workflow Integration plugin per DaVinci Resolve Studio",
+    "main": "main.js",
+    "private": true
+}

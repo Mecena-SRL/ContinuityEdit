@@ -37,13 +37,13 @@ test('battute: entita, estensioni, concatenazione, parentetiche escluse', () => 
   const d = doc.lines.filter((l) => l.type === 'dialogue');
   assert.equal(d.length, 2);
   assert.equal(d[0].character, 'LUDOVICA');
-  assert.equal(d[0].characterExt, '(V.O.)');
+  assert.equal(d[0].characterExt, 'V.O.');
   assert.equal(
     d[0].text,
     "Non c'è nessuno, vero? Dimmi che \"lui\" non è qui & che è tutto a posto.",
   );
   assert.equal(d[1].character, 'OSVALDO');
-  assert.equal(d[1].characterExt, "(CONT'D)");
+  assert.equal(d[1].characterExt, "CONT'D");
   assert.equal(d[1].text, 'Siamo soli. Per ora.');
   assert.equal(d[1].sceneId, 'S002');
   const par = doc.lines.find((l) => l.type === 'parenthetical');
@@ -66,7 +66,7 @@ test('DualDialogue: due battute separate in ordine, con revisioni ignorate', () 
     ['MARTINA', 'Io dico di no.'],
     ['TEODORO', 'Va bene, decidiamo domani.'],
   ]);
-  assert.equal(d[3].characterExt, '(O.S.)');
+  assert.equal(d[3].characterExt, 'O.S.');
   assert.equal(doc.scenes.length, 2);
   assert.equal(doc.scenes[1].heading, 'INT. SALA PROVE - GIORNO');
 });
