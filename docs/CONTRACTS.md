@@ -45,8 +45,28 @@ Note sul formato reale: il testo delle parole ha spazio iniziale (" Questa"); "(
 - Una clip può coprire righe in ordine qualsiasi e la stessa riga più volte (take multipli → `takeIndex` crescente).
 - Algoritmo: allineamento locale (Smith-Waterman) token-per-token con similarità di Levenshtein normalizzata sulla parola; la finestra di ricerca si restringe con le righe candidate. Token da `splitTokens`.
 
-## Anchors / SyncModel (fase successiva)
-`{ clipId, lineId, wordIdx|null, frame, kind: 'manual'|'auto' }`; interpolazione lineare tra ancore consecutive di una clip; persistenza in JSON sidecar + marker Resolve (`customData` = `ce:<lineId>`).
+## Anchors / SyncModel (`core/src/sync/`, import da `core/src/sync/index.js`)
+Modello puro (nessun Resolve). Frame interi relativi alla clip; intervalli e ancore `end` con **fine ESCLUSA** (come `AppendToTimeline`).
+**Righe sincronizzabili: `dialogue` E `action`** (opzionalmente `scene`, `syncableLines(project,{includeScenes})`): le sceneggiature reali sono spesso mute. `alignClip` copre solo le `dialogue`; le `action` (e tutto il resto) si ancorano a mano.
+
+**SyncProject** `{version:1, scriptDoc, clips:{clipId:{fps,durationFrames,startTcFrames,name}}, takes:[{id,clipId,label}], anchors:[], selection:{lineId:takeId}, notes:{lineId|takeId:string}}`
+- `createProject(scriptDoc)`, `addClip(p, clipId, {fps,durationFrames,startTcFrames,name})`, `addTake(p,{id?,clipId,label})`, `setSelection(p,lineId,takeId|null)`, `setNote(p,key,text)`.
+- `serialize(p,{pretty})` / `deserialize(stringOrObject)`: JSON versionato; valida riferimenti incrociati e lancia `Error("Progetto non valido: ...")`; migra v0 (campi assenti) -> v1; versioni future rifiutate.
+
+**Anchor** `{id, takeId, lineId, edge:'start'|'end'|'point', frame, kind:'manual'|'auto', ratio?}` (`point` = istante rappresentativo, usato come inizio se mancano start/end).
+- `addAnchor(p,{takeId,lineId,edge,frame,kind='manual',ratio})` (stessa take/riga/edge/kind = sostituzione; manual e auto convivono, **vince la manual**), `moveAnchor(p,id,frame)` (rende l'ancora manual), `removeAnchor(p,id)`, `anchorsForTake`, `effectiveAnchors(p,takeId)`.
+- `checkAnchors(p,[takeId])` -> warning NON bloccanti `{type,takeId,anchorIds,message}`: `out-of-clip`, `edge-order` (end<=start), `line-order` (ordine delle righe violato), `non-syncable-line`.
+- `fromAlignment(p,takeId,alignResult,{minRatio=0.6,takeIndex,replaceAuto=true})` -> `{added,skipped}`: coverage di `alignClip` -> ancore `auto` start/end con `ratio`.
+
+**Coverage** `coverageForTake(p,takeId,{maxTailFrames=Infinity,interpolate=false})` -> `[{lineId,takeId,clipId,startFrame,endFrame,estimated,startExplicit,endExplicit,source:'manual'|'auto'|'mixed'|'interpolated',ratio,anchorIds}]` ordinata per frame.
+- start/end espliciti se presenti; solo start/point: end = frame della prossima ancora di un'altra riga o fine clip (cap `maxTailFrames`); solo end: start = ancora precedente o 0; righe senza ancore ne' vicine: non coperte; frame clampati alla clip.
+- `interpolate:true`: le righe senza ancore tra due righe con ancora `point` sono stimate proporzionalmente al numero di parole (`estimated:true`, `source:'interpolated'`).
+
+**Query**: `framesForLine(p,lineId)` (coperture in tutti i take), `takesForLine`, `lineAtFrame(p,takeId,frame)`, `bestTake(p,lineId)` / `bestCoverage` (selection, altrimenti non stimata > due estremi espliciti > ratio > manual > primo take).
+
+**Assembly**: `planAssembly(p,lineIds,{handleFrames=0,mergeContiguous=true,mergeGapFrames=0})` -> `[{clipId,takeId,startFrame,endFrame,lineIds}]` (take selezionato o best; righe consecutive dello stesso take unite se contigue in avanti; handle clampati a `[0,durationFrames]`). `planAssemblyDetailed` ritorna anche `skipped:[{lineId,reason:'nessun-take'|'non-coperta'}]`.
+
+Persistenza: JSON sidecar + marker Resolve (`customData` = `ce:<lineId>`).
 
 ## Bridge Resolve (fase successiva, fuori da `core/`)
 Marker: `AddMarker(frame, color, name, note, duration, customData)`. Timeline: `AppendToTimeline([{mediaPoolItem, startFrame, endFrame}])` (fine esclusa). Trascrizione: `TranscribeAudio()` → `GetTranscription()` (async: `GetTranscribeAudioStatus()` → `{'JobStatus': 'Inactive'|'Complete'|...}`).
