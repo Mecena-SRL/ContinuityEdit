@@ -6,6 +6,7 @@ const { app, BrowserWindow, ipcMain, dialog } = require('electron');
 const path = require('node:path');
 const os = require('node:os');
 const fsp = require('node:fs/promises');
+const fs = require('node:fs');
 
 const PLUGIN_ID = 'com.continuityedit.plugin';
 
@@ -48,7 +49,12 @@ async function setup() {
   const { createHandlers, METHOD_NAMES } = require('./main/handlers.js');
 
   const core = await loadCore(__dirname);
-  const bridge = core.createBridge(getResolve, { lazy: true });
+  const bridge = core.createBridge(getResolve, {
+    lazy: true,
+    fileExists: (p) => fsp.access(p).then(() => true, () => false),
+    tmpDir: path.join(os.tmpdir(), 'continuityedit-diag'),
+  });
+  fs.mkdirSync(path.join(os.tmpdir(), 'continuityedit-diag'), { recursive: true });
   const state = createState(core.sync);
   const persist = createPersist({ dir: path.join(app.getPath('userData'), 'projects') });
 
@@ -69,6 +75,13 @@ async function setup() {
     readFile: (p) => fsp.readFile(p),
     writeFile: (p, text) => fsp.writeFile(p, text, 'utf8'),
     diagPath: path.join(os.homedir(), 'Desktop', 'continuityedit_diag.json'),
+    stillsDir: async () => path.join(app.getPath('userData'), 'stills', String(state.meta.projectName || 'senza-nome').replace(/[\\/:*?"<>|]/g, '_')),
+    mkdir: (d) => fsp.mkdir(d, { recursive: true }),
+    showSaveDialog: async ({ suggestedName, filters }) => {
+      const r = await dialog.showSaveDialog(mainWindow, { defaultPath: suggestedName, filters });
+      return r.canceled || !r.filePath ? null : r.filePath;
+    },
+    writeBinary: (p, buf) => fsp.writeFile(p, buf),
   });
 
   for (const name of METHOD_NAMES) {

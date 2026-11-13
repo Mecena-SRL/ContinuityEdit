@@ -8,10 +8,18 @@ const METHODS = [
   'getTranscribeStatus', 'autoSync', 'addAnchor', 'moveAnchor', 'removeAnchor', 'anchorFromMarker',
   'anchorFromPlayhead', 'getState', 'setSelection', 'setNote', 'saveProject', 'loadProject', 'previewLine',
   'assemble', 'writeMarkers', 'runDiagnostics',
+  'listBins', 'loadBins', 'detectGroups', 'setTakeGroup', 'getClipMediaPath', 'board.captureStill', 'saveFile',
+  'sequence.assemble',
 ];
 
 const api = {};
-for (const name of METHODS) api[name] = (...args) => ipcRenderer.invoke(`ce:${name}`, ...args);
+// i nomi con '.' diventano oggetti annidati: 'board.captureStill' -> window.ce.board.captureStill
+for (const name of METHODS) {
+  const parts = name.split('.');
+  let target = api;
+  for (const ns of parts.slice(0, -1)) target = (target[ns] ??= {});
+  target[parts[parts.length - 1]] = (...args) => ipcRenderer.invoke(`ce:${name}`, ...args);
+}
 
 // onChange(cb): cb(state) ad ogni mutazione. Ritorna la funzione per annullare la sottoscrizione.
 api.onChange = (cb) => {
