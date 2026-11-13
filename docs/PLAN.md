@@ -51,3 +51,11 @@ Convenzione: esperti = Sonnet 5.5 effort medio; lavori lunghi/ripetitivi delegat
 
 ## 7. Domande aperte
 Vedi messaggio in chat.
+
+## 8. Esito Fase 0 (Resolve Studio 21.2.0.6, macOS) — probe 1
+- `MediaPoolItem.GetTranscription()` e `SetTranscription()` ESISTONO (non erano documentati dagli esperti). Su clip non trascritta `GetTranscription()` restituisce `None`. Formato del risultato: da verificare col probe 2.
+- Esistono `TranscribeAudio`/`ClearTranscription` (anche su Folder), `Project.GetTranscribeAudioStatus`, `Project.GetCreateSubtitlesFromAudioStatus`.
+- Marker (`AddMarker`, `GetMarkers`, `*ByCustomData`, `UpdateMarkerCustomData`) su MediaPoolItem, Timeline e TimelineItem. `AppendToTimeline`, `CreateTimelineFromClips`, `ImportTimelineFromFile`, `Timeline.Export` presenti. `Timeline.CreateSubtitlesFromAudio` presente.
+- `TimelineItem` ha `GetSourceStartFrame/EndFrame`, `AddTake/SelectTakeByIndex` (utile per i take alternativi).
+- Piano A confermato in via di principio: niente Whisper, testo dalla trascrizione nativa.
+- Attenzione: clip con Start TC 01:00:00:00 a 25 fps (`Start`=0, `End`=7762); la timeline parte dal frame 90000. Va chiarito se i marker usano frame relativi alla clip o assoluti (probe 2).
