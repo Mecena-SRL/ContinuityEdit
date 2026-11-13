@@ -228,7 +228,11 @@ function migrateProject(p, map) {
     marks[nk] = marks[nk] ? mergeMarks(marks[nk], m) : m;
   }
   p.marks = marks;
-  for (const it of p.sequence?.items || []) it.lineIds = [...new Set((it.lineIds || []).map((l) => remap(map, l)))];
+  for (const it of p.sequence?.items || []) {
+    it.lineIds = [...new Set((it.lineIds || []).map((l) => remap(map, l)))];
+    for (const k of ['fromLineId', 'toLineId']) if (it[k]) it[k] = remap(map, it[k]);
+    if (it.lineStarts) it.lineStarts = Object.fromEntries(Object.entries(it.lineStarts).map(([l, f]) => [remap(map, l), f]));
+  }
   for (const it of p.board?.items || []) if (it.lineId) it.lineId = remap(map, it.lineId);
 }
 

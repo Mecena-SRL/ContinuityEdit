@@ -1,4 +1,4 @@
 export {
   ROLES, ensureSequence, sequenceFromLines, sequenceFromLinesDetailed, addItem, moveItem, trimItem, removeItem, reorder,
-  directorCut, toAppendPlan,
+  directorCut, addCutaway, trimCutaway, toAppendPlan, toAppendPlanDetailed,
 } from './sequence.js';

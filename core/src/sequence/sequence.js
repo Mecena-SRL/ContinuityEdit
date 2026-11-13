@@ -1,13 +1,18 @@
 // Sequenza (mini-montaggio) in project.sequence = { id, name, items:[...] }.
+// Modello 'rough cut a linee verticali': V1 = master (role 'master', recordFrame contiguo, lineStarts = frame sorgente
+// d'inizio di ciascuna riga); V2.. = cutaway (role 'cutaway', solo video) che coprono un intervallo di righe
+// fromLineId..toLineId (+ startOffsetFrames/endOffsetFrames), posizionati dove il master e' su fromLineId.
 // Item: { id:'I1', kind:'line'|'clip', lineIds, takeId, clipId, startFrame, endFrame (ESCLUSA), track (1=V1),
 //         role:'main'|'cutaway'|'angle', angle?, recordFrame:number|null, note }
 // Le operazioni mutano project.sequence in place (come il resto di sync) e ritornano l'item / la sequenza.
 // Frame di clip: interi relativi alla clip; recordFrame: relativo all'inizio sequenza.
 
 import { planAssemblyDetailed } from '../sync/assembly.js';
-import { getTake, emptySequence } from '../sync/project.js';
+import { getTake, emptySequence, lineOrder, getLine } from '../sync/project.js';
+import { coverageForTake } from '../sync/coverage.js';
 
-export const ROLES = ['main', 'cutaway', 'angle'];
+export const ROLES = ['master', 'main', 'cutaway', 'angle'];
+const isMaster = (it) => it.role === 'master' || it.role === 'main';
 
 export function ensureSequence(project) {
   if (!project.sequence) project.sequence = emptySequence();
@@ -34,7 +39,7 @@ function makeItem(project, seq, spec) {
   if (!Number.isInteger(spec.startFrame) || !Number.isInteger(spec.endFrame)) throw new Error('startFrame/endFrame devono essere interi');
   const startFrame = clamp(spec.startFrame, 0, dur - 1);
   const endFrame = clamp(spec.endFrame, startFrame + 1, dur);
-  const role = spec.role ?? 'main';
+  const role = spec.role ?? 'master';
   if (!ROLES.includes(role)) throw new Error(`role non valido "${role}"`);
   const track = spec.track ?? 1;
   if (!Number.isInteger(track) || track < 1) throw new Error('track deve essere un intero >= 1');
@@ -51,6 +56,8 @@ function makeItem(project, seq, spec) {
     recordFrame: spec.recordFrame ?? null,
     note: spec.note ?? '',
   };
+  if (spec.lineStarts) it.lineStarts = { ...spec.lineStarts };
+  for (const k of ['fromLineId', 'toLineId', 'startOffsetFrames', 'endOffsetFrames']) if (spec[k] !== undefined) it[k] = spec[k];
   if (spec.angle != null) it.angle = spec.angle; else if (take.angle) it.angle = take.angle;
   return it;
 }
@@ -61,7 +68,10 @@ export function sequenceFromLinesDetailed(project, lineIds, { handleFrames = 0, 
   const { cuts, skipped } = planAssemblyDetailed(project, lineIds, { handleFrames, mergeContiguous, ...rest });
   const seq = { ...emptySequence(), ...(project.sequence ? { id: project.sequence.id, name: project.sequence.name } : {}), items: [] };
   for (const c of cuts) {
-    seq.items.push(makeItem(project, seq, { kind: 'line', lineIds: c.lineIds, takeId: c.takeId, startFrame: c.startFrame, endFrame: c.endFrame }));
+    const cov = coverageForTake(project, c.takeId, rest);
+    const lineStarts = {};
+    for (const l of c.lineIds) { const x = cov.find((k) => k.lineId === l); if (x) lineStarts[l] = x.startFrame; }
+    seq.items.push(makeItem(project, seq, { kind: 'line', lineIds: c.lineIds, takeId: c.takeId, startFrame: c.startFrame, endFrame: c.endFrame, role: 'master', track: 1, lineStarts }));
   }
   project.sequence = seq;
   return { sequence: seq, skipped };
@@ -169,27 +179,118 @@ export function directorCut(project, { groupId, switches = [], range, layered = 
     seq.items.push(makeItem(project, seq, {
       kind: 'clip', takeId: t.id, startFrame, endFrame, angle: s.angle,
       track: layered ? trackOf.get(s.angle) : 1,
-      role: layered ? 'angle' : 'main',
+      role: layered ? 'angle' : 'master',
       recordFrame: layered ? s.start - range.startFrame : null,
     }));
   }
   return seq;
 }
 
-// Piano per AppendToTimeline. Ritorna [{ takeId, clipId, startFrame, endFrame, trackIndex, recordFrame, mediaType }]
-// (fine ESCLUSA). I 'main' hanno recordFrame contiguo a partire da `startFrame`; gli altri usano item.recordFrame
-// (relativo alla sequenza) oppure la posizione corrente del cursore. withAudio: aggiunge mediaType 2 per gli item
-// 'main' o sul livello 1 (audioTrack = traccia audio).
-export function toAppendPlan(sequence, { startFrame = 0, withAudio = false, audioTrack = 1 } = {}) {
+// ---- cutaway guidati dalle righe ------------------------------------------------------------
+
+// Frame sorgente di un cutaway: inizio copertura di fromLineId, fine copertura di toLineId, piu' offset, clamp alla clip.
+function deriveCutaway(project, it) {
+  const ord = lineOrder(project);
+  for (const l of [it.fromLineId, it.toLineId]) if (!getLine(project, l)) throw new Error(`cutaway: riga sconosciuta "${l}"`);
+  if (ord.get(it.fromLineId) > ord.get(it.toLineId)) [it.fromLineId, it.toLineId] = [it.toLineId, it.fromLineId];
+  const cov = coverageForTake(project, it.takeId);
+  const cf = cov.find((c) => c.lineId === it.fromLineId);
+  const ct = cov.find((c) => c.lineId === it.toLineId);
+  if (!cf) throw new Error(`cutaway: il take "${it.takeId}" non copre la riga "${it.fromLineId}"`);
+  if (!ct) throw new Error(`cutaway: il take "${it.takeId}" non copre la riga "${it.toLineId}"`);
+  const dur = project.clips[it.clipId].durationFrames;
+  const s = clamp(cf.startFrame + (it.startOffsetFrames || 0), 0, dur - 1);
+  it.startFrame = s;
+  it.endFrame = clamp(ct.endFrame + (it.endOffsetFrames || 0), s + 1, dur);
+  const ids = [...ord.keys()].filter((l) => ord.get(l) >= ord.get(it.fromLineId) && ord.get(l) <= ord.get(it.toLineId));
+  it.lineIds = ids.filter((l) => cov.some((c) => c.lineId === l));
+  return it;
+}
+
+function masterRecords(seq) {
+  const rec = new Map();
+  let cursor = 0;
+  for (const it of seq.items) if (isMaster(it)) { rec.set(it.id, cursor); cursor += it.endFrame - it.startFrame; }
+  return rec;
+}
+
+// Posizione (relativa alla sequenza) in cui il cutaway inizia nel tempo di timeline, o null se nessun master ha la riga.
+function cutawayRecord(seq, it, rec = masterRecords(seq)) {
+  const m = seq.items.find((x) => isMaster(x) && x.lineIds.includes(it.fromLineId));
+  if (!m) return null;
+  return Math.max(0, rec.get(m.id) + ((m.lineStarts?.[it.fromLineId] ?? m.startFrame) - m.startFrame) + (it.startOffsetFrames || 0));
+}
+
+function freeTrack(seq, it) {
+  const rec = masterRecords(seq);
+  const r0 = cutawayRecord(seq, it, rec);
+  if (r0 == null) return 2;
+  const r1 = r0 + (it.endFrame - it.startFrame);
+  for (let t = 2; ; t++) {
+    const clash = seq.items.some((x) => {
+      if (x === it || x.role !== 'cutaway' || x.track !== t || x.fromLineId === undefined) return false;
+      const a = cutawayRecord(seq, x, rec);
+      return a != null && a < r1 && r0 < a + (x.endFrame - x.startFrame);
+    });
+    if (!clash) return t;
+  }
+}
+
+// Aggiunge un cutaway (solo video) sulle righe fromLineId..toLineId dal take dato. track omesso: primo livello >= 2 libero.
+// Errore chiaro se il take non copre una delle righe. sequence omessa/null = project.sequence.
+export function addCutaway(project, sequence, { takeId, fromLineId, toLineId = fromLineId, startOffsetFrames = 0, endOffsetFrames = 0, track, note = '' } = {}) {
+  const seq = sequence || ensureSequence(project);
+  const { take } = clipOf(project, takeId);
+  if (!Number.isInteger(startOffsetFrames) || !Number.isInteger(endOffsetFrames)) throw new Error('addCutaway: gli offset devono essere interi');
+  if (track !== undefined && (!Number.isInteger(track) || track < 2)) throw new Error('addCutaway: track deve essere >= 2');
+  const it = { id: nextItemId(seq), kind: 'clip', lineIds: [], takeId, clipId: take.clipId, startFrame: 0, endFrame: 1, track: track ?? 2, role: 'cutaway',
+    fromLineId, toLineId, startOffsetFrames, endOffsetFrames, recordFrame: null, note };
+  if (take.angle) it.angle = take.angle;
+  deriveCutaway(project, it);
+  if (track === undefined) it.track = freeTrack(seq, it);
+  seq.items.push(it);
+  return it;
+}
+
+// Trascina gli estremi della linea verticale (altra riga) o affina in frame; ricalcola i frame sorgente.
+// Firma: trimCutaway(project, sequence, itemId, {fromLineId?, toLineId?, startOffsetFrames?, endOffsetFrames?, track?}).
+export function trimCutaway(project, sequence, itemId, patch = {}) {
+  const seq = sequence || ensureSequence(project);
+  const it = seq.items.find((x) => x.id === itemId);
+  if (!it || it.role !== 'cutaway' || it.fromLineId === undefined) throw new Error(`trimCutaway: cutaway sconosciuto "${itemId}"`);
+  const next = { ...it };
+  for (const k of ['fromLineId', 'toLineId', 'startOffsetFrames', 'endOffsetFrames']) if (patch[k] !== undefined) next[k] = patch[k];
+  if (!Number.isInteger(next.startOffsetFrames) || !Number.isInteger(next.endOffsetFrames)) throw new Error('trimCutaway: gli offset devono essere interi');
+  if (patch.track !== undefined) {
+    if (!Number.isInteger(patch.track) || patch.track < 2) throw new Error('trimCutaway: track deve essere >= 2');
+    next.track = patch.track;
+  }
+  deriveCutaway(project, next);
+  Object.assign(it, next);
+  return it;
+}
+
+// Piano per AppendToTimeline con skipped (cutaway senza master sulla riga). Vedi toAppendPlan.
+export function toAppendPlanDetailed(sequence, { startFrame = 0, withAudio = false, audioTrack = 1 } = {}) {
   const plan = [];
+  const skipped = [];
+  const rec = masterRecords(sequence);
   let cursor = 0;
   for (const it of sequence.items) {
     const len = it.endFrame - it.startFrame;
     let rel;
-    if (it.role === 'main') { rel = cursor; cursor += len; } else rel = it.recordFrame ?? cursor;
+    if (isMaster(it)) { rel = cursor; cursor += len; } else if (it.role === 'cutaway' && it.fromLineId !== undefined) {
+      rel = cutawayRecord(sequence, it, rec);
+      if (rel == null) { skipped.push({ itemId: it.id, reason: 'master-assente-sulla-riga' }); continue; }
+    } else rel = it.recordFrame ?? cursor;
     const entry = { takeId: it.takeId, clipId: it.clipId, startFrame: it.startFrame, endFrame: it.endFrame, trackIndex: it.track, recordFrame: startFrame + rel };
     plan.push({ ...entry, mediaType: 1 });
-    if (withAudio && (it.role === 'main' || it.track === 1)) plan.push({ ...entry, trackIndex: audioTrack, mediaType: 2 });
+    if (withAudio && (isMaster(it) || (it.role !== 'cutaway' && it.track === 1))) plan.push({ ...entry, trackIndex: audioTrack, mediaType: 2 });
   }
-  return plan;
+  return { plan, skipped };
 }
+
+// Ritorna [{ takeId, clipId, startFrame, endFrame, trackIndex, recordFrame, mediaType }] (fine ESCLUSA).
+// master: recordFrame contiguo da `startFrame`. cutaway con fromLineId: recordFrame = recordFrame del master alla riga
+// fromLineId (inizio copertura) + startOffsetFrames, durata = end-start sorgente, mai audio. Altri: item.recordFrame o cursore.
+export const toAppendPlan = (sequence, opts) => toAppendPlanDetailed(sequence, opts).plan;
