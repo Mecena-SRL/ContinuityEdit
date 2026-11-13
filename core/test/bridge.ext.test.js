@@ -45,7 +45,7 @@ test('loadBins: clip di piu\' bin con bin e meta; bin mancanti segnalati; niente
   assert.deepEqual(r.clips.map((c) => c.clipId), ['a1', 'b1', 'c1', 'x1']);
   const a = r.clips[0];
   assert.equal(a.bin, 'Scena 1');
-  assert.deepEqual(a.meta, { scene: '1', shot: '2', take: '3', camera: 'A', angle: null });
+  assert.deepEqual(a.meta, { scene: '1', shot: '2', take: '3', camera: 'A', angle: null, shotType: null });
   assert.equal(a.fps, 25);
   assert.equal(r.clips[3].bin, 'Extra');
   assert.equal(r.clips[3].meta.scene, null);

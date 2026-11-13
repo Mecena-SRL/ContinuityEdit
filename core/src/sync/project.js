@@ -7,6 +7,9 @@ export const DEFAULT_GRADE_PALETTE = ['B', 'B+', 'B++'];
 export const EDGES = ['start', 'end', 'point'];
 export const KINDS = ['manual', 'auto'];
 export const SYNCABLE_TYPES = ['dialogue', 'action'];
+// Tipo di inquadratura del take e provenienza dell'informazione (campi opzionali del modello v2).
+export const SHOTS = ['totale', 'medio', 'stretto', 'dettaglio', 'altro'];
+export const SHOT_SOURCES = ['manuale', 'metadati', 'copertura'];
 
 const isInt = (n) => Number.isInteger(n);
 
@@ -60,14 +63,17 @@ function checkTakeFields(t, err) {
   if (!Array.isArray(t.tags) || t.tags.some((x) => typeof x !== 'string')) err('tags deve essere un array di stringhe');
   if (t.bin != null && typeof t.bin !== 'string') err('bin deve essere stringa o null');
   if (t.meta != null && typeof t.meta !== 'object') err('meta deve essere un oggetto');
+  if (t.shot != null && !SHOTS.includes(t.shot)) err(`shot "${t.shot}"`);
+  if (t.shotSource != null && !SHOT_SOURCES.includes(t.shotSource)) err(`shotSource "${t.shotSource}"`);
 }
 
-export function addTake(project, { id, clipId, label, groupId = null, angle = null, rating = null, grade = '', tags = [], bin = null, meta } = {}) {
+export function addTake(project, { id, clipId, label, groupId = null, angle = null, rating = null, grade = '', tags = [], bin = null, meta, shot = null, shotSource = null } = {}) {
   if (!project.clips[clipId]) throw new Error(`addTake: clip sconosciuta "${clipId}"`);
   const takeId = id || nextId('T', project.takes);
   if (project.takes.some((t) => t.id === takeId)) throw new Error(`addTake: take "${takeId}" gia' esistente`);
   const take = { id: takeId, clipId, label: label ?? takeId, groupId, angle, rating, grade, tags: [...tags], bin };
   if (meta) take.meta = { ...meta };
+  if (shot != null) { take.shot = shot; take.shotSource = shotSource ?? 'manuale'; }
   checkTakeFields(take, (m) => { throw new Error(`addTake: ${m}`); });
   project.takes.push(take);
   return take;
@@ -122,6 +128,18 @@ export function setGradePalette(project, list) {
   if (!Array.isArray(list) || list.some((x) => typeof x !== 'string' || !x)) throw new Error('setGradePalette: elenco di stringhe non vuote richiesto');
   project.gradePalette = [...new Set(list)];
   return project.gradePalette;
+}
+
+// Tipo di inquadratura. shot null azzera (e azzera anche la provenienza). source default 'manuale'.
+export function setTakeShot(project, takeId, shot, source = 'manuale') {
+  const t = getTake(project, takeId);
+  if (!t) throw new Error(`setTakeShot: take sconosciuto "${takeId}"`);
+  if (shot == null) { t.shot = null; t.shotSource = null; return t; }
+  if (!SHOTS.includes(shot)) throw new Error(`setTakeShot: shot non valido "${shot}"`);
+  if (source != null && !SHOT_SOURCES.includes(source)) throw new Error(`setTakeShot: shotSource non valido "${source}"`);
+  t.shot = shot;
+  t.shotSource = source ?? 'manuale';
+  return t;
 }
 
 export function setTakeGroup(project, takeId, groupId, angle = null) {
@@ -282,5 +300,11 @@ export function deserialize(input) {
   if (v > CURRENT_VERSION) throw new Error(`Progetto di versione ${v} piu' recente di quella supportata (${CURRENT_VERSION})`);
   p = structuredClone(p);
   while (v < CURRENT_VERSION) { p = MIGRATIONS[v](p); v = p.version; }
+  // Tollerante: valori sconosciuti di shot/shotSource (es. scritti da una versione futura) diventano null.
+  for (const t of Array.isArray(p.takes) ? p.takes : []) {
+    if (!t || typeof t !== 'object') continue;
+    if (t.shot != null && !SHOTS.includes(t.shot)) { t.shot = null; t.shotSource = null; }
+    if (t.shotSource != null && !SHOT_SOURCES.includes(t.shotSource)) t.shotSource = null;
+  }
   return validateProject(p);
 }

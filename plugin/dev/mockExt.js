@@ -1,5 +1,5 @@
 // Estensioni v2 di window.ce simulate (dati SINTETICI): bin, gruppi multicam, spoglio, valutazioni, sequenza, lavagna.
-import { planAssemblyDetailed, coverageForTake } from '../../core/src/sync/index.js';
+import { planAssemblyDetailed, coverageForTake, addAnchor, detectGroupsByCoverage, suggestMaster, suggestGroupShots, suggestMasterAmong, SHOTS } from '../../core/src/sync/index.js';
 
 const delay = (ms = 40) => new Promise((r) => setTimeout(r, ms));
 const clone = (x) => JSON.parse(JSON.stringify(x));
@@ -18,7 +18,7 @@ function placeholder(label, color) {
 export function createExt({ getProject, emit, opts = {} }) {
   const E = {
     takeProps: {
-      T1: { groupId: 'G1', angle: 'CAM A', rating: 'buono', grade: 'B', tags: ['intenso'], bin: 'Scena 1', meta: { scene: '1', shot: '1A', take: '3', camera: 'A' } },
+      T1: { groupId: 'G1', angle: 'CAM A', rating: 'buono', grade: 'B', tags: ['intenso'], bin: 'Scena 1', meta: { scene: '1', shot: '1A', take: '3', camera: 'A' }, shot: 'totale', shotSource: 'metadati' },
       T2: { groupId: 'G1', angle: 'CAM B', rating: null, grade: 'B+', tags: [], bin: 'Scena 1', meta: { scene: '1', shot: '1A', take: '3', camera: 'B' } },
       T3: { groupId: null, angle: null, rating: 'scarto', grade: '', tags: ['fuori fuoco'], bin: 'Scena 3', meta: { scene: '3', shot: '3B', take: '1', camera: 'A' } },
     },
@@ -30,7 +30,9 @@ export function createExt({ getProject, emit, opts = {} }) {
   };
   const nid = (p) => `${p}${++E.seq}`;
   const P = () => getProject();
-  const props = (takeId) => (E.takeProps[takeId] ||= { groupId: null, angle: null, rating: null, grade: '', tags: [], bin: null, meta: null });
+  const props = (takeId) => (E.takeProps[takeId] ||= { groupId: null, angle: null, rating: null, grade: '', tags: [], bin: null, meta: null, shot: null, shotSource: null });
+  // progetto "decorato" con i campi dei take tenuti qui (il core lavora su questo per copertura/master)
+  const decorated = () => ({ ...P(), takes: P().takes.map((t) => ({ ...t, ...clone(props(t.id)) })) });
   const mut = async (fn) => { const r = fn(); emit(); await delay(); return r; };
 
   const decorate = (snap) => {
@@ -102,7 +104,9 @@ export function createExt({ getProject, emit, opts = {} }) {
         for (const id of b.clips) {
           if (!P().clips[id]) { P().clips[id] = { fps: 25, durationFrames: 900 + id.charCodeAt(1) * 3, startTcFrames: 90000, name: id === 'C4' ? 'A002_C002' : 'A002_C003' }; }
           let take = P().takes.find((t) => t.clipId === id);
-          if (!take) { take = { id: `T${P().takes.length + 1}`, clipId: id, label: `Ciak ${P().takes.length + 1}` }; P().takes.push(take); props(take.id).bin = b.name; props(take.id).meta = { scene: b.name.slice(-1), shot: '3B', take: '2', camera: id === 'C4' ? 'B' : 'A' }; }
+          if (!take) { take = { id: `T${P().takes.length + 1}`, clipId: id, label: `Ciak ${P().takes.length + 1}` }; P().takes.push(take);
+            if (id === 'C4') for (const [n, s] of [[14, 20], [15, 90], [16, 200], [17, 300], [18, 420]]) { addAnchor(P(), { takeId: take.id, lineId: `L${String(n).padStart(4, '0')}`, edge: 'start', frame: s, kind: 'auto' }); addAnchor(P(), { takeId: take.id, lineId: `L${String(n).padStart(4, '0')}`, edge: 'end', frame: s + 80, kind: 'auto' }); }
+            if (id === 'C5') Object.assign(props(take.id), { shot: 'medio', shotSource: 'manuale' }); props(take.id).bin = b.name; props(take.id).meta = { scene: b.name.slice(-1), shot: '3B', take: '2', camera: id === 'C4' ? 'B' : 'A' }; }
           clips.push(clipInfo(id));
         }
       }
@@ -115,6 +119,24 @@ export function createExt({ getProject, emit, opts = {} }) {
       const t3 = P().takes.find((t) => t.id === 'T3');
       if (t3 && t4 && !(props(t4.id).groupId)) return [{ groupId: 'G2', label: 'Scena 3 · 3B', takeIds: [t3.id, t4.id], reason: 'stesso Shot/Take, timecode sovrapposto' }];
       return [];
+    },
+    async detectGroupsByCoverage() {
+      await delay(120);
+      return detectGroupsByCoverage(decorated()).map((g) => ({ ...g, label: `Copertura ${g.takeIds.join(' + ')}`, source: 'copertura', master: suggestMasterAmong(decorated(), g.takeIds) }));
+    },
+    async suggestMaster(groupId) {
+      await delay(30);
+      const p = decorated();
+      const m = suggestMaster(p, groupId);
+      if (!m) throw new Error(`Gruppo sconosciuto: ${groupId}`);
+      return { ...m, hypotheses: suggestGroupShots(p, groupId) };
+    },
+    async setTakeShot({ takeId, shot, source }) {
+      return mut(() => {
+        if (shot != null && !SHOTS.includes(shot)) throw new Error(`setTakeShot: shot non valido "${shot}"`);
+        Object.assign(props(takeId), shot == null ? { shot: null, shotSource: null } : { shot, shotSource: source || 'manuale' });
+        return true;
+      });
     },
     async setTakeGroup(takeId, groupId, angle) { return mut(() => { Object.assign(props(takeId), { groupId: groupId || null, angle: angle || null }); return { ok: true }; }); },
     async editScript(e) {

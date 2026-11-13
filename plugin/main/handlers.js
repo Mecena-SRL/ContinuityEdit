@@ -280,7 +280,13 @@ function createHandlers(deps) {
         }
         take.bin = c.bin;
         take.meta = { scene: c.meta.scene, shot: c.meta.shot, take: c.meta.take, camera: c.meta.camera };
+        if (c.meta.shotType) take.meta.shotType = c.meta.shotType;
         if (c.meta.angle && !take.angle) take.angle = c.meta.angle;
+        // Tipo di inquadratura dai metadati (o dal nome file): mai sopra una scelta manuale/di copertura gia' fatta.
+        if (!take.shot || take.shotSource === 'metadati') {
+          const s = sync.suggestShotFromMetadata({ shotType: c.meta.shotType, shot: c.meta.shot, angle: c.meta.angle, name: c.name });
+          if (s) sync.setTakeShot(p, take.id, s.shot, 'metadati');
+        }
         out.push({ ...c, takeId: take.id });
       }
       return out;
@@ -300,6 +306,28 @@ function createHandlers(deps) {
     const groups = await bridge.detectGroups(descr);
     return groups.map(({ groupId, label, ids, reason, angles }) => ({ groupId, label, takeIds: ids, reason, angles }));
   };
+
+  // Proposte per copertura (take dello stesso bin che coprono le stesse righe), unite a quelle per metadati/nome
+  // senza duplicati. Ogni proposta: { groupId, label, takeIds, reason, source:'metadati'|'copertura', confidence?, master }.
+  h.detectGroupsByCoverage = async (opts = {}) => {
+    const p = state.need();
+    let meta = [];
+    try { meta = (await h.detectGroups()).filter((g) => g.takeIds.every((id) => !sync.getTake(p, id)?.groupId)); } catch { meta = []; }
+    meta = meta.map((g) => ({ ...g, source: 'metadati' }));
+    const used = new Set(meta.flatMap((g) => g.takeIds));
+    const cov = sync.detectGroupsByCoverage(p, { ...opts, excludeTakeIds: [...used], usedGroupIds: meta.map((g) => g.groupId) })
+      .map((g) => ({ ...g, label: `Copertura ${g.takeIds.map((id) => sync.getTake(p, id)?.label || id).join(' + ')}`, source: 'copertura' }));
+    return sync.mergeGroupProposals(meta, cov).map((g) => ({ ...g, master: sync.suggestMasterAmong(p, g.takeIds) }));
+  };
+
+  h.suggestMaster = async (groupId) => {
+    const p = state.need();
+    if (!groupId || !p.takes.some((t) => t.groupId === groupId)) throw new Error(`Gruppo sconosciuto: ${groupId}`);
+    return { ...sync.suggestMaster(p, groupId), hypotheses: sync.suggestGroupShots(p, groupId) };
+  };
+
+  // shot null = azzera. `source` opzionale ('manuale' di default; 'copertura'/'metadati' per proposte confermate).
+  h.setTakeShot = ({ takeId, shot, source } = {}) => mutate(async (p) => { sync.setTakeShot(p, takeId, shot ?? null, source ?? 'manuale'); return true; });
 
   h.setTakeGroup = (takeId, groupId, angle) => mutate(async (p) => { sync.setTakeGroup(p, takeId, groupId, angle ?? null); return true; });
 
@@ -480,7 +508,7 @@ const METHOD_NAMES = [
   'getTranscribeStatus', 'autoSync', 'addAnchor', 'moveAnchor', 'removeAnchor', 'anchorFromMarker',
   'anchorFromPlayhead', 'getState', 'setSelection', 'setNote', 'saveProject', 'loadProject', 'previewLine',
   'assemble', 'writeMarkers', 'runDiagnostics',
-  'listBins', 'loadBins', 'detectGroups', 'setTakeGroup', 'getClipMediaPath', 'board.addStill', 'board.removeItem', 'board.refreshStillViaResolve', 'saveFile',
+  'listBins', 'loadBins', 'detectGroups', 'detectGroupsByCoverage', 'suggestMaster', 'setTakeShot', 'setTakeGroup', 'getClipMediaPath', 'board.addStill', 'board.removeItem', 'board.refreshStillViaResolve', 'saveFile',
   'editScript', 'undo', 'redo', 'setMark', 'setGradePalette',
   'sequence.fromLines', 'sequence.addItem', 'sequence.moveItem', 'sequence.trimItem', 'sequence.removeItem',
   'sequence.setMaster', 'sequence.addCutaway', 'sequence.trimCutaway', 'sequence.assemble',

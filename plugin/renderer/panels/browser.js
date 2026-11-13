@@ -1,5 +1,6 @@
 // Browser: elenco take/clip dei bin caricati con valutazione rapida (Buono/Scarto, B/B+/B++), tag e note; anche per singola riga.
 import { h } from '../dom.js';
+import { shotAbbr } from '../viewmodel/shots.js';
 import { gradePalette, patchFromKey, parseTags, markFor, ratingLabel, toggleRating, toggleGrade } from '../viewmodel/marks.js';
 
 export function browserTab(ctx) {
@@ -39,6 +40,7 @@ export function browserTab(ctx) {
   const line = S.focusId ? S.d.byId.get(S.focusId) : null;
   const at = S.activeTakeId;
   return h('div', { class: 'browser' },
+    h('div', { class: 'btn-row' }, h('button', { class: 'btn btn-primary btn-small', type: 'button', 'data-fk': 'br-scan', title: 'Foglio di contatto per classificare le inquadrature', onclick: () => ctx.openScan() }, 'Scansiona clip')),
     h('p', { class: 'hint' }, `Seleziona un take e usa i tasti: 1-${pal.length} voto (${pal.join(', ')}), B buono, X scarto, 0 azzera.${hidden ? ` ${hidden} take nascosti dai filtri della barra.` : ''}`),
     takes.length === 0 ? h('p', { class: 'empty' }, 'Nessun take da mostrare. Carica un bin di scena o cambia i filtri.')
       : [...byBin].map(([bin, list]) => h('section', { class: 'bin-sec' },
@@ -51,6 +53,7 @@ export function browserTab(ctx) {
           onkeydown: onKey(t.id, null),
         },
         h('div', { class: 'brow-head' }, h('i', { class: 'dotc' }), h('b', {}, ctx.takeLabel(t.id)),
+          t.shot ? h('span', { class: 'chip shot-chip st-confermato', title: 'Inquadratura' }, shotAbbr(t.shot)) : null,
           h('span', { class: 'dim' }, [t.meta?.scene && `Sc ${t.meta.scene}`, t.meta?.shot, t.meta?.take && `Tk ${t.meta.take}`, t.angle].filter(Boolean).join(' · ')),
           h('button', { class: 'btn btn-small', type: 'button', 'data-fk': `br-m-${t.id}`, title: 'Usa questo take come master su V1', onclick: () => import('./sequence.js').then((m) => m.setMasterFor(ctx, t.id)) }, 'Master')),
         controls(t, t.id, null, `r-${t.id}`),

@@ -5,6 +5,7 @@ import { ratingLabel } from '../viewmodel/marks.js';
 import { setMasterFor } from './sequence.js';
 import { takeStats } from '../viewmodel/summary.js';
 import { formatDuration } from '../viewmodel/format.js';
+import { shotAbbr, shotLabel } from '../viewmodel/shots.js';
 
 let pollTimer = null;
 const bins = { open: false, list: null, sel: new Set(store.get('ce.bins', [])) };
@@ -117,6 +118,7 @@ export function renderTakes(el, ctx) {
         h('button', { class: 'btn btn-primary btn-small', type: 'button', 'data-fk': 'bins-load', disabled: !bins.sel.size || S.busy.has('Caricamento bin'), onclick: loadBins }, 'Carica bin')) : null),
     h('div', { class: 'panel-actions' },
       h('button', { class: 'btn btn-primary', type: 'button', 'data-fk': 'add-clips', disabled: S.busy.has('Aggiunta clip'), onclick: addSelected }, 'Aggiungi clip selezionate'),
+      view.takes.length ? h('button', { class: 'btn btn-primary', type: 'button', 'data-fk': 'scan-open', title: 'Foglio di contatto per classificare i take: Totale, Medio, Stretto, Dettaglio', onclick: () => ctx.openScan() }, `Scansiona clip${(S.d.allTakes || []).some((t) => !t.shot) ? ` (${(S.d.allTakes || []).filter((t) => !t.shot).length} da classificare)` : ''}`) : null,
       view.takes.length > 1 ? h('button', { class: 'btn', type: 'button', 'data-fk': 'detect', onclick: detect, title: 'Riconosce i take della stessa ripresa da più camere' }, `Raggruppa angoli${mc.length ? ` (${mc.length})` : ''}`) : null,
       view.takes.length ? h('button', { class: 'btn', type: 'button', 'data-fk': 'tr-all', disabled: !untranscribed.length, onclick: () => transcribe(untranscribed) }, `Trascrivi tutte (${untranscribed.length})`) : null),
     view.takes.length === 0
@@ -150,6 +152,7 @@ function takeCard(ctx, t, st, act) {
         onclick: () => ctx.setActiveTake(t.id),
       }, active ? 'Attivo' : 'Attiva')),
     h('div', { class: 'take-tags' },
+      tk.shot ? h('span', { class: `chip shot-chip st-${tk.shotSource === 'metadati' ? 'proposta' : 'confermato'}`, title: `${shotLabel(tk.shot)}${tk.shotSource ? ` (${tk.shotSource})` : ''}` }, shotAbbr(tk.shot)) : h('span', { class: 'chip shot-chip st-mancante', title: 'Inquadratura non classificata: usa Scansiona clip' }, 'inquadratura?'),
       tk.groupId ? h('span', { class: 'chip' }, `${tk.angle || 'angolo'} · gruppo ${tk.groupId}`) : null,
       tk.rating ? h('span', { class: `chip ${tk.rating === 'buono' ? 'ok' : 'bad'}` }, ratingLabel(tk.rating)) : null,
       tk.grade ? h('span', { class: 'chip grade' }, tk.grade) : null,
