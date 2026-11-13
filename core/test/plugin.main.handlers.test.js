@@ -58,7 +58,7 @@ test('METHOD_NAMES coincide con l\'API del contratto e con gli handler', async (
 
 test('preload e METHOD_NAMES elencano gli stessi metodi', async () => {
   const src = await readFile(new URL('../../plugin/preload.js', import.meta.url), 'utf8');
-  const listed = [...src.slice(src.indexOf('const METHODS'), src.indexOf('];')).matchAll(/'(\w+)'/g)].map((m) => m[1]);
+  const listed = [...src.slice(src.indexOf('const METHODS'), src.indexOf('];')).matchAll(/'([\w.]+)'/g)].map((m) => m[1]);
   assert.deepEqual(listed, METHOD_NAMES);
 });
 

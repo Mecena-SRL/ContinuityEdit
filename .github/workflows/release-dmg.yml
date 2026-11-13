@@ -1,0 +1,49 @@
+name: release-dmg
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Versione (es. 0.0.1)"
+        required: true
+        default: "0.0.1"
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  dmg:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Versione
+        id: ver
+        run: |
+          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then v="${GITHUB_REF_NAME#v}"; else v="${{ github.event.inputs.version }}"; fi
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+      - run: npm ci
+      - run: npm test
+      - run: scripts/make-icns.sh
+      - run: scripts/build-dmg.sh "${{ steps.ver.outputs.version }}"
+      - name: SHA-256
+        run: |
+          cd dist
+          shasum -a 256 "ContinuityEdit-${{ steps.ver.outputs.version }}.dmg" | tee "ContinuityEdit-${{ steps.ver.outputs.version }}.dmg.sha256"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ContinuityEdit-${{ steps.ver.outputs.version }}
+          path: |
+            dist/ContinuityEdit-${{ steps.ver.outputs.version }}.dmg
+            dist/ContinuityEdit-${{ steps.ver.outputs.version }}.dmg.sha256
+      - name: Release
+        if: github.ref_type == 'tag'
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/ContinuityEdit-${{ steps.ver.outputs.version }}.dmg
+            dist/ContinuityEdit-${{ steps.ver.outputs.version }}.dmg.sha256
