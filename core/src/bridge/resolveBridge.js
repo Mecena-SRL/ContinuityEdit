@@ -237,6 +237,19 @@ export function createBridge(resolveOrGetter, { lazy = false, fileExists = null,
     return finish('Complete');
   }
 
+  // Stato leggero delle clip (una proprieta' per clip): {clipId: {online, transcribed, transcriptionStatus}}.
+  async function clipStatus(clipIds) {
+    const out = {};
+    for (const id of clipIds || []) {
+      const item = await findItem(id);
+      if (!item) { out[id] = { online: false, transcribed: false, transcriptionStatus: '' }; continue; }
+      let st = '';
+      try { st = String((await item.GetClipProperty('Transcription Status')) ?? ''); } catch { /* assente */ }
+      out[id] = { online: true, transcribed: /^transcribed$/i.test(st.trim()), transcriptionStatus: st };
+    }
+    return out;
+  }
+
   async function getTranscription(clipId) {
     const item = await findItem(clipId);
     if (!item) return null;
@@ -1027,7 +1040,7 @@ export function createBridge(resolveOrGetter, { lazy = false, fileExists = null,
   }
 
   return {
-    getEnv, projectInfo, forgetItems, getSelectedClips, getClip, transcribe, status, getTranscription, previewLine,
+    getEnv, projectInfo, forgetItems, getSelectedClips, getClip, clipStatus, transcribe, status, getTranscription, previewLine,
     assemble, writeMarkers, playheadSourceFrame, runDiagnostics,
     listBins, loadBins, detectGroups, getClipMediaPath, exportStill, executeAppendPlan, addStillMarker, removeStillMarker,
     timelineUsage, timelinePlayhead, seekTimeline, writeClipMeta, importMedia,

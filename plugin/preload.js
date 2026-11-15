@@ -4,7 +4,7 @@
 const { contextBridge, ipcRenderer } = require('electron/renderer');
 
 const METHODS = [
-  'getEnv', 'checkProject', 'pickScriptFile', 'loadScript', 'scriptFromTranscripts', 'getSelectedClips', 'addTake', 'removeTake', 'transcribeClips',
+  'getEnv', 'checkProject', 'pickScriptFile', 'loadScript', 'scriptFromTranscripts', 'getSelectedClips', 'takeStatus', 'addTake', 'removeTake', 'transcribeClips',
   'getTranscribeStatus', 'autoSync', 'getTranscript', 'searchSpeech', 'addAnchor', 'moveAnchor', 'removeAnchor', 'anchorFromMarker',
   'anchorFromPlayhead', 'getState', 'setSelection', 'setNote', 'saveProject', 'loadProject', 'previewLine', 'revealInResolve',
   'assemble', 'writeMarkers', 'writeToResolve', 'timelineUsage', 'timelinePlayhead', 'seekTimeline', 'runDiagnostics',

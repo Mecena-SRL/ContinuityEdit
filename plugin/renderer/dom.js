@@ -45,7 +45,7 @@ export function renderInto(container, build) {
   }
   const scroll = container.scrollTop;
   const nodes = build();
-  container.replaceChildren(...[].concat(nodes).filter(Boolean));
+  container.replaceChildren(...[nodes].flat(Infinity).filter((n) => n != null && n !== false).map((n) => (n.nodeType ? n : document.createTextNode(String(n)))));
   container.scrollTop = scroll;
   if (fk) {
     const el = [...container.querySelectorAll('[data-fk]')].find((e) => e.dataset.fk === fk);

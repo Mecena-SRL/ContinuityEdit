@@ -55,11 +55,13 @@ function closeVideo(clipId) {
 
 async function openVideo(ce, take, useProxy) {
   const info = await ce.getClipMediaPath(take.takeId);
-  const path = (useProxy && info.proxyPath) || info.path;
-  if (!path) throw new Error('nessun percorso media');
+  if (info && info.ok === false) throw new Error(info.reason || 'file della clip non disponibile');
+  // URL registrati dal main nella whitelist ce-media:// (mai un percorso costruito qui: verrebbe rifiutato)
+  const url = (useProxy && info.proxyUrl) || (!useProxy && info.url) || null;
+  if (!url) throw new Error(useProxy ? 'nessun proxy' : 'nessun percorso media');
   const video = document.createElement('video');
   video.crossOrigin = 'anonymous'; video.muted = true; video.preload = 'auto'; video.playsInline = true;
-  video.src = `ce-media://media/${encodeURIComponent(path)}`;
+  video.src = url;
   await new Promise((res, rej) => {
     const to = setTimeout(() => rej(new Error('timeout')), 8000);
     video.addEventListener('loadeddata', () => { clearTimeout(to); res(); }, { once: true });

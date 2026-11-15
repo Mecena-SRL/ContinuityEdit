@@ -236,6 +236,14 @@ function createHandlers(deps) {
 
   h.getSelectedClips = async () => withMediaUrl(await bridge.getSelectedClips());
 
+  // Stato delle clip di tutti i take (trascritta? ancora nel Media Pool?): [{clipId, takeId, online, transcribed}].
+  h.takeStatus = async () => {
+    const p = state.project;
+    if (!p || !p.takes.length) return [];
+    const st = await bridge.clipStatus(p.takes.map((t) => t.clipId));
+    return p.takes.map((t) => ({ takeId: t.id, clipId: t.clipId, ...(st[t.clipId] || { online: false, transcribed: false }) }));
+  };
+
   h.addTake = async ({ clipId, label } = {}) => {
     if (!clipId) throw new Error('clipId mancante');
     const info = await bridge.getClip(clipId);
@@ -810,7 +818,7 @@ function createHandlers(deps) {
 
 // Nomi dei metodi del contratto (usati da main.js per registrare ipcMain.handle('ce:<nome>')).
 const METHOD_NAMES = [
-  'getEnv', 'checkProject', 'pickScriptFile', 'loadScript', 'scriptFromTranscripts', 'getSelectedClips', 'addTake', 'removeTake', 'transcribeClips',
+  'getEnv', 'checkProject', 'pickScriptFile', 'loadScript', 'scriptFromTranscripts', 'getSelectedClips', 'takeStatus', 'addTake', 'removeTake', 'transcribeClips',
   'getTranscribeStatus', 'autoSync', 'getTranscript', 'searchSpeech', 'addAnchor', 'moveAnchor', 'removeAnchor', 'anchorFromMarker',
   'anchorFromPlayhead', 'getState', 'setSelection', 'setNote', 'saveProject', 'loadProject', 'previewLine', 'revealInResolve',
   'assemble', 'writeMarkers', 'writeToResolve', 'timelineUsage', 'timelinePlayhead', 'seekTimeline', 'runDiagnostics',
