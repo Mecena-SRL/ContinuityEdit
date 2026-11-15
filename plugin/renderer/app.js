@@ -321,15 +321,19 @@ async function refreshEnv() {
   try { S.env = await ce.getEnv(); rerender(['header']); } catch { /* Resolve occupato */ }
 }
 let usageBusy = false;
+let usageNext = 0;
+// Le timeline lunghe costano molte chiamate: l'intervallo cresce con la durata dell'ultima lettura (mai Resolve
+// impegnato per piu' di ~1/8 del tempo).
 async function pollUsage(force = false) {
-  if (usageBusy || (!force && (document.hidden || !S.snap.view.takes.length))) return;
+  if (usageBusy || (!force && (document.hidden || !S.snap.view.takes.length || Date.now() < usageNext))) return;
   usageBusy = true;
+  const t0 = Date.now();
   try {
     const u = await ce.timelineUsage();
     const changed = JSON.stringify(u.usedLines) !== JSON.stringify(S.usage.usedLines) || u.ok !== S.usage.ok;
     S.usage = u;
     if (changed) rerender(['script', 'takes']);
-  } catch { /* ignora */ } finally { usageBusy = false; }
+  } catch { /* ignora */ } finally { usageBusy = false; usageNext = Date.now() + Math.max(6000, (Date.now() - t0) * 8); }
 }
 let phBusy = false;
 async function pollPlayhead() {
@@ -397,7 +401,7 @@ async function init() {
   }
   rerender();
   setInterval(pollProject, 4000);
-  setInterval(() => pollUsage(), 7000);
+  setInterval(() => pollUsage(), 2000);
   setInterval(pollPlayhead, 900);
   setTimeout(() => pollUsage(true), 1500);
 }

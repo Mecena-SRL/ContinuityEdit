@@ -64,7 +64,8 @@ async function openVideo(ce, take, useProxy) {
   video.src = url;
   await new Promise((res, rej) => {
     const to = setTimeout(() => rej(new Error('timeout')), 8000);
-    video.addEventListener('loadeddata', () => { clearTimeout(to); res(); }, { once: true });
+    // video non decodificabile ma contenitore leggibile (es. ProRes in .mov): niente immagine, solo audio
+    video.addEventListener('loadeddata', () => { clearTimeout(to); if (video.videoWidth) res(); else rej(new Error('video non decodificabile')); }, { once: true });
     video.addEventListener('error', () => { clearTimeout(to); rej(new Error(video.error?.message || 'non decodificabile')); }, { once: true });
   });
   return { video, info, usingProxy: useProxy && !!info.proxyPath };
