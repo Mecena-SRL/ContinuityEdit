@@ -66,3 +66,8 @@ Vedi messaggio in chat.
 - `AppendToTimeline` con in/out: source start/end = frame relativi alla clip, fine esclusa; piazza alla `GetStartFrame()` della timeline.
 - Costanti export presenti: FCPXML 1.9/1.10, EDL, OTIO, AAF, CSV/TAB. Nessun export SRT diretto.
 - Dati del formato e contratti: `docs/CONTRACTS.md`.
+
+## 10. Stato v0.1.0
+Fatto: lettore integrato (sostituisce il visore sorgente), mini-montaggio con corsie e invio in timeline (recordFrame assoluto, audio collegato, marker delle righe), assistente passo-passo, Sincronizza tutto, ricerca nel parlato, modalità documentario, revisioni dello script con rimappatura, indicatori "già usato" e "Segui timeline", scrittura opt-in nel Media Pool, diagnostica estesa. Dettagli e stato di verifica di ogni chiamata: `docs/RESOLVE_API_NOTES.md`.
+Da collaudare sul Mac (firme marcate **E**): AppendToTimeline con trackIndex/recordFrame/mediaType e senza mediaType, SetCurrentTimeline, Get/SetCurrentTimecode, GetCurrentVideoItem, SetMetadata/SetClipColor/AddFlag, SetMarkInOut (out incluso?), ImportMedia di un .srt, decodifica dei codec reali nel lettore.
+Prossimi passi possibili: audio collegato di un registratore esterno nel lettore (GetAudioMapping), take alternativi in timeline (TimelineItem.AddTake), sottotitoli nativi se la API li espone.
