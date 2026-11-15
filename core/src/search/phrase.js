@@ -11,7 +11,7 @@ import { smithWaterman } from '../align/smithWaterman.js';
 
 /** Chiave fonetica approssimata (italiano, tollerante anche per l'inglese piu' comune). */
 export function phoneticKey(token) {
-  let t = String(token || '').toLowerCase();
+  let t = String(token || '').toLowerCase().replace(/(.)\1+/g, '$1');
   t = t.replace(/ph/g, 'f')
     .replace(/ch(?=[ei])/g, 'k').replace(/gh(?=[ei])/g, 'g')
     .replace(/h/g, '')
