@@ -1,46 +1,55 @@
 'use strict';
 // Handler del contratto window.ce (docs/PLUGIN_API.md), indipendenti da Electron: tutto e' iniettato.
+// Nessun require(): questo file gira anche nell'harness del browser (plugin/dev), con un finto Resolve.
 //
 // deps = {
-//   core:    { sync, parseResolveTranscript, alignClip, parseFdx, parsePdf }   // moduli ESM del core
+//   core:    { sync, parseResolveTranscript, alignClip, parseFdx, parsePdf, applyScriptEdit, diffRevision, applyRevision,
+//              scriptFromTranscripts, searchTranscripts, sequence, board }   // moduli ESM del core
 //   bridge:  oggetto di createBridge(resolve)
-//   state:   createState(core.sync)
+//   state:   createState(core.sync, core.sequence)
 //   persist: createPersist({dir})  (opzionale: senza, niente salvataggio)
 //   notify:  (snapshot) => void    // push 'ce:changed'
 //   pickFile: async () => {path,name}|null   // dialogo nativo
-//   readFile: async (path) => Buffer
+//   readFile: async (path) => Buffer|string
 //   diagPath: string               // dove scrivere la diagnostica
 //   writeFile: async (path, text)
-//   // estensioni v2 (tutte opzionali):
+//   // facoltativi:
 //   media:   registro ce-media:// (plugin/main/protocol.js createMediaRegistry): whitelist dei file servibili
 //   stillsDir: string|(async()=>string)   // dove salvare gli still esportati da Resolve (solo refreshStillViaResolve)
 //   mkdir: async (dir)                    // crea la cartella (ricorsiva)
 //   showSaveDialog: async ({suggestedName, filters}) => path|null
-//   writeBinary: async (path, Buffer)
+//   writeBinary: async (path, Buffer|Uint8Array)
 // }
 // Errori: Error con messaggio italiano. Le azioni Resolve "non riuscite" restituiscono {ok:false, reason}.
-
-// ---------------------------------------------------------------------------------------------------------
-// Contratto v2 (docs/PLUGIN_API.md, docs/CONTRACTS.md) interamente cablato: bin/gruppi/marks (sync), editScript
-// (applyScriptEdit), undo/redo (createHistory, 50 passi), sequence.* (modello master V1 + cutaway V2..), board.*
-// (inclusi still come marker Resolve) e saveFile. Ogni mutazione passa da mutate(): snapshot per l'undo, ripristino
-// del progetto se la mutazione lancia, autosave del sidecar e 'ce:changed'.
-// Deps core usati oltre a v1: core.applyScriptEdit, core.sequence, core.board (moduli di core/src/*).
-// ---------------------------------------------------------------------------------------------------------
+// Ogni mutazione passa da mutate(): coda seriale (nessuna mutazione si accavalla a un'altra), snapshot per l'undo,
+// ripristino del progetto se la mutazione lancia, autosave del sidecar e 'ce:changed'.
 
 const SYNC_TYPES = new Set(['dialogue', 'action']);
 const MARKER_COLOR = { start: 'Green', end: 'Red', point: 'Blue' };
+const EMPTY_DOC = () => ({ title: '', source: null, scenes: [], lines: [] });
+const b64 = (s) => (typeof Buffer !== 'undefined' ? Buffer.from(s, 'utf8') : new TextEncoder().encode(s));
 
 function createHandlers(deps) {
   const { core, bridge, state, persist, notify = () => {}, pickFile, readFile, writeFile, diagPath, stillsDir, mkdir, showSaveDialog, writeBinary, media } = deps;
   const { sync } = core;
   const history = sync.createHistory();
+  const transcripts = new Map(); // clipId -> TranscriptDoc (cache per lettore e ricerca)
+
+  // ----- coda seriale: le mutazioni (e i cambi di progetto) non si accavallano
+  let chain = Promise.resolve();
+  const serial = (fn) => {
+    const run = chain.then(fn, fn);
+    chain = run.then(() => {}, () => {});
+    return run;
+  };
 
   async function projectName() {
     if (state.meta.projectName) return state.meta.projectName;
     try {
       const env = await bridge.getEnv();
       state.meta.projectName = env.projectName || 'senza-nome';
+      state.meta.projectKey = `${env.projectName}|${env.projectId ?? ''}`;
+      if (env.timelineFps) state.meta.timelineFps = env.timelineFps;
     } catch {
       state.meta.projectName = 'senza-nome';
     }
@@ -57,23 +66,31 @@ function createHandlers(deps) {
     }
   }
 
+  // Progetto corrente; senza script se ne crea uno vuoto (si possono caricare le clip prima della sceneggiatura).
+  function ensureProject() {
+    if (!state.project) state.setProject(sync.createProject(EMPTY_DOC()));
+    return state.project;
+  }
+
   // Esegue una mutazione, poi salva e notifica.
   // Atomica: se fn lancia il progetto torna com'era (ripristino in place) e la cronologia non cambia.
-  async function mutate(fn) {
-    const p = state.need();
-    const before = structuredClone(p);
-    let result;
-    try {
-      result = await fn(p);
-    } catch (e) {
-      for (const k of Object.keys(p)) delete p[k];
-      Object.assign(p, before);
-      throw e;
-    }
-    history.push(before);
-    await autosave();
-    notify(state.snapshot());
-    return result;
+  function mutate(fn, { create = false } = {}) {
+    return serial(async () => {
+      const p = create ? ensureProject() : state.need();
+      const before = structuredClone(p);
+      let result;
+      try {
+        result = await fn(p);
+      } catch (e) {
+        for (const k of Object.keys(p)) delete p[k];
+        Object.assign(p, before);
+        throw e;
+      }
+      history.push(before);
+      await autosave();
+      notify(state.snapshot());
+      return result;
+    });
   }
 
   const takeOrThrow = (p, takeId) => {
@@ -89,32 +106,118 @@ function createHandlers(deps) {
 
   const h = {};
 
-  // ----- ambiente
-  h.getEnv = () => bridge.getEnv();
+  // ----- ambiente e cambio di progetto
+  h.getEnv = async () => {
+    const env = await bridge.getEnv();
+    if (env.timelineFps) state.meta.timelineFps = env.timelineFps;
+    return env;
+  };
+
+  // Se in Resolve e' stato aperto un altro progetto, salva quello vecchio e carica il sidecar del nuovo.
+  h.checkProject = async () => {
+    const env = await bridge.getEnv(); // fuori dalla coda: se Resolve e' occupato non blocca le modifiche
+    if (env.timelineFps) state.meta.timelineFps = env.timelineFps;
+    const key = `${env.projectName}|${env.projectId ?? ''}`;
+    if (!env.projectName || state.meta.projectKey === key) return { changed: false, env };
+    return serial(() => switchProject(env, key));
+  };
+  async function switchProject(env, key) {
+    if (state.meta.projectKey === key) return { changed: false, env };
+    const first = state.meta.projectKey === null;
+    if (!first) await autosave();
+    state.meta.projectKey = key;
+    state.meta.projectName = env.projectName;
+    bridge.forgetItems?.();
+    transcripts.clear();
+    history.clear();
+    let loaded = false;
+    state.setProject(null);
+    if (persist) {
+      try {
+        const text = await persist.load(env.projectName);
+        if (text != null) { state.setProject(sync.deserialize(text)); loaded = true; }
+      } catch (e) { state.meta.loadError = e.message; }
+    }
+    notify(state.snapshot());
+    return { changed: !first, loaded, env };
+  }
 
   // ----- script
   h.pickScriptFile = async () => (pickFile ? pickFile() : null);
 
-  h.loadScript = async (path) => {
+  async function parseScript(path) {
     if (typeof path !== 'string' || !path) throw new Error('Percorso dello script mancante');
     const ext = path.toLowerCase().split('.').pop();
-    let doc;
-    if (ext === 'fdx') doc = core.parseFdx((await readFile(path)).toString('utf8'));
-    else if (ext === 'pdf') doc = await core.parsePdf(await readFile(path));
-    else throw new Error('Formato non supportato: usa un file .fdx o .pdf');
+    if (ext !== 'fdx' && ext !== 'pdf') throw new Error('Formato non supportato: usa un file .fdx (Final Draft) o .pdf');
+    const raw = await readFile(path);
+    if (ext === 'fdx') return core.parseFdx(typeof raw === 'string' ? raw : raw.toString('utf8'));
+    return core.parsePdf(raw);
+  }
+
+  // Carica lo script. Se c'era gia' uno script con lavoro sopra, il nuovo e' trattato come REVISIONE: le righe
+  // uguali o modificate conservano ancore, scelte, note e valutazioni; quelle tolte le perdono (report in `revision`).
+  h.loadScript = async (path, { fresh = false } = {}) => {
+    const doc = await parseScript(path);
     const { warnings = [], confidence = null, ...scriptDoc } = doc;
-    const prev = state.project;
-    const project = sync.createProject(scriptDoc);
-    // Lo script e' cambiato: si tengono clip e take, si azzerano ancore/selezione/note (riferite alle vecchie righe).
-    if (prev) {
-      for (const [id, c] of Object.entries(prev.clips)) project.clips[id] = { ...c };
-      for (const t of prev.takes) project.takes.push({ ...t });
+    return serial(async () => {
+      const prev = state.project;
+      let revision = null;
+      if (prev && prev.scriptDoc.lines.length && !fresh && core.diffRevision) {
+        const before = structuredClone(prev);
+        const diff = core.diffRevision(prev.scriptDoc, scriptDoc);
+        const r = core.applyRevision(prev, scriptDoc, diff);
+        revision = { ...diff.stats, ...r };
+        history.push(before);
+        state.setProject(prev, { warnings, confidence });
+      } else {
+        const project = sync.createProject(scriptDoc);
+        if (prev) { // si tengono clip, take (con valutazioni e inquadrature), gruppi
+          for (const [id, c] of Object.entries(prev.clips)) project.clips[id] = { ...c };
+          for (const t of prev.takes) project.takes.push(structuredClone(t));
+          project.gradePalette = [...(prev.gradePalette || project.gradePalette)];
+          for (const [k, m] of Object.entries(prev.marks || {})) if (!k.includes('|')) project.marks[k] = m;
+          const takeIds = new Set(prev.takes.map((t) => t.id));
+          for (const [k, v] of Object.entries(prev.notes || {})) if (takeIds.has(k)) project.notes[k] = v;
+          if (prev.board) project.board = { items: prev.board.items.map((i) => ({ ...i, lineId: null })), links: [...prev.board.links] };
+        }
+        state.setProject(project, { warnings, confidence });
+        history.clear();
+      }
+      await autosave();
+      notify(state.snapshot());
+      return { scriptDoc: state.project.scriptDoc, warnings, confidence, revision };
+    });
+  };
+
+  // Modalita' documentario: le trascrizioni dei take diventano il copione (con ancore esatte).
+  h.scriptFromTranscripts = async ({ takeIds } = {}) => {
+    const p = ensureProject();
+    const ids = takeIds?.length ? takeIds : p.takes.map((t) => t.id);
+    const entries = [];
+    const missing = [];
+    for (const id of ids) {
+      const t = takeOrThrow(p, id);
+      const doc = await transcriptOf(t.clipId);
+      if (!doc || !doc.words.length) { missing.push(id); continue; }
+      entries.push({ takeId: id, name: p.clips[t.clipId]?.name || t.label, transcript: doc });
     }
-    state.setProject(project, { warnings, confidence });
-    history.clear();
-    await autosave();
-    notify(state.snapshot());
-    return { scriptDoc: project.scriptDoc, warnings, confidence };
+    if (!entries.length) throw new Error('Nessuna clip ha una trascrizione: trascrivile prima (pulsante "Trascrivi")');
+    const { scriptDoc, anchors } = core.scriptFromTranscripts(entries, { title: 'Trascrizioni' });
+    return serial(async () => {
+      const prev = state.project;
+      const before = prev ? structuredClone(prev) : null;
+      const project = sync.createProject(scriptDoc);
+      if (prev) {
+        for (const [id, c] of Object.entries(prev.clips)) project.clips[id] = { ...c };
+        for (const t of prev.takes) project.takes.push(structuredClone(t));
+      }
+      for (const a of anchors) sync.addAnchor(project, a);
+      state.setProject(project, { warnings: [] });
+      if (before && before.scriptDoc.lines.length) history.push(before); else history.clear();
+      await autosave();
+      notify(state.snapshot());
+      return { lines: scriptDoc.lines.length, takes: entries.length, missing };
+    });
   };
 
   // ----- clip e take
@@ -137,16 +240,27 @@ function createHandlers(deps) {
 
   h.getSelectedClips = async () => withMediaUrl(await bridge.getSelectedClips());
 
-  h.addTake = ({ clipId, label } = {}) => mutate(async (p) => {
+  // Stato delle clip di tutti i take (trascritta? ancora nel Media Pool?): [{clipId, takeId, online, transcribed}].
+  h.takeStatus = async () => {
+    const p = state.project;
+    if (!p || !p.takes.length) return [];
+    const st = await bridge.clipStatus(p.takes.map((t) => t.clipId));
+    return p.takes.map((t) => ({ takeId: t.id, clipId: t.clipId, ...(st[t.clipId] || { online: false, transcribed: false }) }));
+  };
+
+  h.addTake = async ({ clipId, label } = {}) => {
     if (!clipId) throw new Error('clipId mancante');
     const info = await bridge.getClip(clipId);
     if (!info) throw new Error('Clip non trovata nel Media Pool');
-    sync.addClip(p, clipId, {
-      fps: info.fps, durationFrames: info.durationFrames, startTcFrames: info.startTcFrames, name: info.name,
-    });
-    const take = sync.addTake(p, { clipId, label: label || undefined });
-    return { takeId: take.id };
-  });
+    if (!(info.fps > 0) || !(info.durationFrames > 0)) throw new Error(`Della clip "${info.name}" non si leggono fps o durata (clip offline?)`);
+    return mutate(async (p) => {
+      const existing = p.takes.find((t) => t.clipId === clipId);
+      if (existing) return { takeId: existing.id, existed: true };
+      sync.addClip(p, clipId, { fps: info.fps, durationFrames: info.durationFrames, startTcFrames: info.startTcFrames, name: info.name });
+      const take = sync.addTake(p, { clipId, label: label || undefined });
+      return { takeId: take.id };
+    }, { create: true });
+  };
 
   h.removeTake = (takeId) => mutate(async (p) => {
     const t = takeOrThrow(p, takeId);
@@ -154,6 +268,13 @@ function createHandlers(deps) {
     p.anchors = p.anchors.filter((a) => a.takeId !== takeId);
     for (const [l, tk] of Object.entries(p.selection)) if (tk === takeId) delete p.selection[l];
     delete p.notes[takeId];
+    for (const k of Object.keys(p.marks || {})) if (k.startsWith(`${takeId}|`)) delete p.marks[k];
+    if (p.sequence) p.sequence.items = p.sequence.items.filter((i) => i.takeId !== takeId);
+    if (p.board) {
+      const gone = new Set(p.board.items.filter((i) => i.takeId === takeId).map((i) => i.id));
+      p.board.items = p.board.items.filter((i) => !gone.has(i.id));
+      p.board.links = p.board.links.filter((l) => !gone.has(l.from) && !gone.has(l.to));
+    }
     if (!p.takes.some((x) => x.clipId === t.clipId)) delete p.clips[t.clipId];
     return true;
   });
@@ -161,26 +282,76 @@ function createHandlers(deps) {
   h.transcribeClips = async (clipIds) => {
     if (!Array.isArray(clipIds) || clipIds.length === 0) throw new Error('Nessuna clip da trascrivere');
     const r = await bridge.transcribe(clipIds);
+    for (const id of r.started) transcripts.delete(id);
     return { started: r.started, failed: r.failed };
   };
   h.getTranscribeStatus = () => bridge.status();
 
-  h.autoSync = (takeId) => mutate(async (p) => {
-    const take = takeOrThrow(p, takeId);
-    const clip = p.clips[take.clipId];
-    const raw = await bridge.getTranscription(take.clipId);
-    if (!raw) throw new Error('La clip non ha ancora una trascrizione: avviala dal pannello e riprova');
-    const transcript = core.parseResolveTranscript(raw, { clipId: take.clipId, fps: clip.fps, startTcFrames: clip.startTcFrames });
-    if (transcript.words.length === 0) throw new Error('La trascrizione non contiene parole utilizzabili');
-    const result = core.alignClip(p.scriptDoc, transcript);
-    const { added, skipped } = sync.fromAlignment(p, takeId, result);
-    return { added: added.length, skipped: skipped.length, unmatchedCount: (result.unmatched || []).length, language: transcript.language };
-  });
+  // TranscriptDoc della clip (cache). null se la clip non e' trascritta.
+  async function transcriptOf(clipId, { refresh = false } = {}) {
+    if (!refresh && transcripts.has(clipId)) return transcripts.get(clipId);
+    const p = state.project;
+    const clip = p?.clips?.[clipId];
+    const raw = await bridge.getTranscription(clipId);
+    if (!raw) return null;
+    const info = clip || (await bridge.getClip(clipId));
+    const doc = core.parseResolveTranscript(raw, { clipId, fps: info.fps, startTcFrames: info.startTcFrames });
+    transcripts.set(clipId, doc);
+    return doc;
+  }
+
+  h.autoSync = async (takeId) => {
+    const p0 = state.need();
+    const take0 = takeOrThrow(p0, takeId);
+    const transcript = await transcriptOf(take0.clipId, { refresh: true });
+    if (!transcript) throw new Error('La clip non ha ancora una trascrizione: premi "Trascrivi" e attendi la fine');
+    if (transcript.words.length === 0) throw new Error('La trascrizione non contiene parole (clip muta o solo rumore): usa le ancore manuali dal lettore');
+    return mutate(async (p) => {
+      if (!p.scriptDoc.lines.some((l) => l.type === 'dialogue')) {
+        return { added: 0, skipped: 0, unmatchedCount: transcript.words.length, language: transcript.language, mute: true };
+      }
+      const result = core.alignClip(p.scriptDoc, transcript);
+      const { added, skipped } = sync.fromAlignment(p, takeId, result);
+      return { added: added.length, skipped: skipped.length, unmatchedCount: (result.unmatched || []).length, language: transcript.language };
+    });
+  };
+
+  // Parole della trascrizione per il lettore (karaoke) e la ricerca: [{text,startFrame,endFrame}].
+  h.getTranscript = async ({ takeId, refresh = false } = {}) => {
+    const p = state.need();
+    const t = takeOrThrow(p, takeId);
+    const doc = await transcriptOf(t.clipId, { refresh });
+    if (!doc) return { ok: false, reason: 'clip non trascritta' };
+    return { ok: true, language: doc.language, words: doc.words.map((w) => ({ text: w.text, startFrame: w.startFrame, endFrame: w.endFrame, speaker: w.speaker })) };
+  };
+
+  // "Cerca nel parlato" su tutte le trascrizioni dei take (anche senza sceneggiatura).
+  h.searchSpeech = async ({ query, takeIds, limit = 60 } = {}) => {
+    const p = state.need();
+    if (!String(query || '').trim()) return { hits: [], searched: 0, untranscribed: 0 };
+    const docs = [];
+    let untranscribed = 0;
+    for (const t of p.takes) {
+      if (takeIds?.length && !takeIds.includes(t.id)) continue;
+      let doc = null;
+      try { doc = await transcriptOf(t.clipId); } catch { doc = null; }
+      if (doc) docs.push({ takeId: t.id, words: doc.words }); else untranscribed++;
+    }
+    const hits = core.searchTranscripts(docs, query, { limit });
+    for (const x of hits) {
+      const line = sync.lineAtFrame(p, x.takeId, x.startFrame);
+      x.lineId = line ? line.lineId : null;
+    }
+    return { hits, searched: docs.length, untranscribed };
+  };
 
   // ----- ancore manuali
   h.addAnchor = ({ takeId, lineId, edge, frame } = {}) => mutate(async (p) => {
     takeOrThrow(p, takeId); lineOrThrow(p, lineId);
-    return { anchorId: sync.addAnchor(p, { takeId, lineId, edge, frame: Math.round(frame), kind: 'manual' }).id };
+    if (!Number.isFinite(frame)) throw new Error('Frame mancante');
+    const clip = p.clips[sync.getTake(p, takeId).clipId];
+    const f = Math.min(Math.max(0, Math.round(frame)), clip.durationFrames);
+    return { anchorId: sync.addAnchor(p, { takeId, lineId, edge, frame: f, kind: 'manual' }).id, frame: f };
   });
   h.moveAnchor = (anchorId, frame) => mutate(async (p) => { sync.moveAnchor(p, anchorId, Math.round(frame)); return true; });
   h.removeAnchor = (anchorId) => mutate(async (p) => sync.removeAnchor(p, anchorId));
@@ -195,7 +366,7 @@ function createHandlers(deps) {
     if (!r.ok) return { ok: false, reason: r.reason };
     const clip = p.clips[take.clipId];
     const frame = Math.min(Math.max(0, r.frame), clip.durationFrames);
-    await mutate(async () => sync.addAnchor(p, { takeId, lineId, edge, frame, kind: 'manual' }));
+    await mutate(async (q) => sync.addAnchor(q, { takeId, lineId, edge, frame, kind: 'manual' }));
     return { ok: true, frame };
   };
 
@@ -210,7 +381,7 @@ function createHandlers(deps) {
     const file = await persist.save(await projectName(), sync.serialize(p, { pretty: true }));
     return { ok: true, path: file };
   };
-  h.loadProject = async () => {
+  h.loadProject = () => serial(async () => {
     if (!persist) return { loaded: false, ...state.snapshot() };
     const text = await persist.load(await projectName());
     if (text == null) return { loaded: false, ...state.snapshot() };
@@ -218,7 +389,7 @@ function createHandlers(deps) {
     history.clear();
     notify(state.snapshot());
     return { loaded: true, ...state.snapshot() };
-  };
+  });
 
   // ----- azioni su Resolve
   h.previewLine = async ({ lineId, takeId } = {}) => {
@@ -227,6 +398,15 @@ function createHandlers(deps) {
     const cov = sync.coverageForTake(p, takeId).find((c) => c.lineId === lineId);
     if (!cov) return { ok: false, reason: 'la riga non e\' coperta in questo take' };
     return bridge.previewLine(take.clipId, cov.startFrame, cov.endFrame);
+  };
+  // "Mostra in Resolve": seleziona la clip nel Media Pool con In/Out sull'intervallo dato (fine esclusa).
+  h.revealInResolve = async ({ takeId, startFrame, endFrame } = {}) => {
+    const p = state.need();
+    const take = takeOrThrow(p, takeId);
+    const dur = p.clips[take.clipId].durationFrames;
+    const s = Math.max(0, Math.round(startFrame ?? 0));
+    const e = Math.min(dur, Math.max(s + 1, Math.round(endFrame ?? dur)));
+    return bridge.previewLine(take.clipId, s, e);
   };
 
   h.assemble = async ({ lineIds, timelineName, handleFrames = 0 } = {}) => {
@@ -251,12 +431,92 @@ function createHandlers(deps) {
       const frame = Math.min(Math.max(0, a.frame), clip.durationFrames - 1);
       return {
         frame, color: MARKER_COLOR[a.edge] || 'Blue', name: `${a.lineId} ${a.edge}`,
-        note: line && SYNC_TYPES.has(line.type) ? (line.character || line.type) : '', duration: 1,
+        note: line && SYNC_TYPES.has(line.type) ? `${line.character ? `${line.character}: ` : ''}${line.text}`.slice(0, 200) : '', duration: 1,
         customData: `ce:${a.lineId}:${a.edge}`,
       };
     });
     const r = await bridge.writeMarkers(take.clipId, markers);
     return { ok: r.ok, count: r.count, ...(r.reason ? { reason: r.reason } : {}), ...(r.failed?.length ? { failed: r.failed } : {}) };
+  };
+
+  // Valutazioni/inquadrature nel Media Pool di Resolve (opt-in, non distruttivo). opts: {takeIds?, keywords, clipColor, flags, overwriteColor}
+  const SHOT_KW = { totale: 'Totale', medio: 'Medio', stretto: 'Stretto', dettaglio: 'Dettaglio', altro: 'Altro' };
+  h.writeToResolve = async ({ takeIds, keywords = true, clipColor = false, flags = false, overwriteColor = false } = {}) => {
+    const p = state.need();
+    const list = p.takes.filter((t) => !takeIds?.length || takeIds.includes(t.id));
+    const results = [];
+    for (const t of list) {
+      const kw = [];
+      if (t.rating === 'buono') kw.push('Buono');
+      if (t.rating === 'scarto') kw.push('Scarto');
+      if (t.grade) kw.push(t.grade);
+      if (t.shot && SHOT_KW[t.shot]) kw.push(SHOT_KW[t.shot]);
+      for (const tag of t.tags || []) kw.push(tag);
+      const color = t.rating === 'buono' ? 'Green' : t.rating === 'scarto' ? 'Orange' : null;
+      const r = await bridge.writeClipMeta(t.clipId, {
+        keywords: keywords ? kw : null, clipColor: clipColor ? color : null, flag: flags && t.rating === 'buono' ? 'Green' : null, overwriteColor,
+      });
+      results.push({ takeId: t.id, ...r });
+    }
+    return { ok: results.every((r) => r.ok), count: results.length, results };
+  };
+
+  // ----- timeline di Resolve: indicatori "gia' usato", segui il playhead, vai alla riga
+  // usedLines: {lineId: [takeId]} = righe la cui copertura (nel take) cade in un pezzo montato nella timeline corrente.
+  h.timelineUsage = async () => {
+    const p = state.project;
+    const u = await bridge.timelineUsage();
+    if (!u.ok) return { ok: false, reason: u.reason, usedLines: {}, usedTakes: {} };
+    const usedLines = {}; const usedTakes = {};
+    if (p) {
+      const byClip = new Map();
+      for (const t of p.takes) { if (!byClip.has(t.clipId)) byClip.set(t.clipId, []); byClip.get(t.clipId).push(t); }
+      const covCache = new Map();
+      const covOf = (id) => { if (!covCache.has(id)) covCache.set(id, sync.coverageForTake(p, id)); return covCache.get(id); };
+      for (const it of u.items) {
+        for (const t of byClip.get(it.clipId) || []) {
+          usedTakes[t.id] = (usedTakes[t.id] || 0) + 1;
+          for (const c of covOf(t.id)) {
+            const overlap = Math.min(c.endFrame, it.srcEnd) - Math.max(c.startFrame, it.srcStart);
+            if (overlap > 0 && overlap >= Math.min(12, (c.endFrame - c.startFrame) / 2)) {
+              (usedLines[c.lineId] ||= []);
+              if (!usedLines[c.lineId].includes(t.id)) usedLines[c.lineId].push(t.id);
+            }
+          }
+        }
+      }
+    }
+    return { ok: true, timelineName: u.timelineName, items: u.items.length, usedLines, usedTakes };
+  };
+
+  h.timelinePlayhead = async () => {
+    const p = state.project;
+    const r = await bridge.timelinePlayhead();
+    if (!r.ok) return r;
+    const out = { ok: true, timecode: r.timecode, takeId: null, frame: r.srcFrame, lineId: null };
+    if (p && r.clipId) {
+      const t = p.takes.find((x) => x.clipId === r.clipId);
+      if (t) {
+        out.takeId = t.id;
+        const c = sync.lineAtFrame(p, t.id, r.srcFrame);
+        out.lineId = c ? c.lineId : null;
+      }
+    }
+    return out;
+  };
+
+  // Porta il playhead della timeline sulla riga (o sul frame) di un take, se e' montato nella timeline corrente.
+  h.seekTimeline = async ({ takeId, lineId, frame } = {}) => {
+    const p = state.need();
+    const t = takeOrThrow(p, takeId);
+    let f = frame;
+    if (lineId) {
+      const c = sync.coverageForTake(p, takeId).find((x) => x.lineId === lineId);
+      if (!c) return { ok: false, reason: 'la riga non e\' coperta in questo take' };
+      f = c.startFrame;
+    }
+    if (!Number.isFinite(f)) return { ok: false, reason: 'frame mancante' };
+    return bridge.seekTimeline(t.clipId, Math.round(f));
   };
 
   // ----- estensioni v2: bin, gruppi, still, piano di montaggio
@@ -265,7 +525,6 @@ function createHandlers(deps) {
   // Carica i bin e registra ogni clip come take (una sola volta per clip). Ritorna le clip con bin/meta/takeId.
   h.loadBins = async (names) => {
     if (!Array.isArray(names) || names.length === 0) throw new Error('Nessun bin selezionato');
-    state.need();
     const { clips, missing } = await bridge.loadBins(names);
     await withMediaUrl(clips);
     if (clips.length === 0) throw new Error(missing.length ? `Bin non trovati: ${missing.join(', ')}` : 'I bin selezionati non contengono clip');
@@ -290,17 +549,15 @@ function createHandlers(deps) {
         out.push({ ...c, takeId: take.id });
       }
       return out;
-    });
+    }, { create: true });
   };
 
   // Euristiche sui take registrati; non modifica il progetto (la UI conferma poi con setTakeGroup).
   h.detectGroups = async () => {
     const p = state.need();
-    const byClip = new Map();
     const descr = [];
     for (const t of p.takes) {
       const clip = p.clips[t.clipId] || {};
-      byClip.set(t.id, t);
       descr.push({ id: t.id, name: clip.name || t.clipId, fps: clip.fps, durationFrames: clip.durationFrames, startTcFrames: clip.startTcFrames, meta: { ...(t.meta || {}), angle: t.angle ?? null } });
     }
     const groups = await bridge.detectGroups(descr);
@@ -331,21 +588,29 @@ function createHandlers(deps) {
 
   h.setTakeGroup = (takeId, groupId, angle) => mutate(async (p) => { sync.setTakeGroup(p, takeId, groupId, angle ?? null); return true; });
 
+  // Etichetta del take (nome breve mostrato ovunque). Vuota = torna al nome predefinito.
+  h.setTakeLabel = (takeId, label) => mutate(async (p) => { const t = takeOrThrow(p, takeId); t.label = String(label || '').trim().slice(0, 40) || t.id; return true; });
+
   // ----- spoglio, undo/redo, valutazione
   h.editScript = async (edit) => {
     await mutate(async (p) => core.applyScriptEdit(p, edit));
     return state.snapshot();
   };
 
-  async function swap(next) {
-    if (!next) return state.snapshot();
-    state.meta.project = next;
-    await autosave();
-    notify(state.snapshot());
-    return state.snapshot();
+  function swap(dir) {
+    return serial(async () => {
+      const p = state.need();
+      const can = dir === 'undo' ? history.canUndo() : history.canRedo();
+      const next = can ? history[dir](p) : null;
+      if (!next) return { ok: false, reason: dir === 'undo' ? 'niente da annullare' : 'niente da ripetere', ...state.snapshot() };
+      state.meta.project = next;
+      await autosave();
+      notify(state.snapshot());
+      return { ok: true, ...state.snapshot() };
+    });
   }
-  h.undo = async () => { const p = state.need(); return swap(history.undo(p)); };
-  h.redo = async () => { const p = state.need(); return swap(history.redo(p)); };
+  h.undo = () => swap('undo');
+  h.redo = () => swap('redo');
 
   h.setMark = ({ takeId, lineId = null, ...patch } = {}) => mutate(async (p) => { sync.setMark(p, takeId, lineId ?? null, patch); return true; });
   h.setGradePalette = (list) => mutate(async (p) => sync.setGradePalette(p, list));
@@ -354,8 +619,7 @@ function createHandlers(deps) {
     const take = takeOrThrow(state.need(), takeId);
     const r = await mediaUrls(take.clipId);
     if (!r.ok) return { ok: false, reason: r.reason };
-    const { ok, ...rest } = r;
-    return rest;
+    return r;
   };
 
   // ----- lavagna (modello core/src/board). Still = marker Resolve 'ce:still:<id>' + item; nessun file.
@@ -428,7 +692,8 @@ function createHandlers(deps) {
     return r;
   });
 
-  // ----- sequenza (modello master V1 + cutaway V2..)
+  // ----- sequenza (modello master V1 + cutaway V2..) ed editor
+  const so = () => state.seqOpts(state.need());
   h['sequence.fromLines'] = (lineIds, opts = {}) => mutate(async (p) => {
     if (!Array.isArray(lineIds) || lineIds.length === 0) throw new Error('Nessuna riga da montare');
     const { sequence, skipped } = Q().sequenceFromLinesDetailed(p, lineIds, opts);
@@ -437,50 +702,103 @@ function createHandlers(deps) {
   h['sequence.addItem'] = (spec) => mutate(async (p) => Q().addItem(p, spec));
   h['sequence.moveItem'] = (id, pos) => mutate(async (p) => Q().moveItem(p, id, pos));
   h['sequence.trimItem'] = (id, range) => mutate(async (p) => Q().trimItem(p, id, range));
-  h['sequence.removeItem'] = (id) => mutate(async (p) => { Q().removeItem(p, id); return true; });
+  h['sequence.removeItem'] = (id) => mutate(async (p) => { Q().deleteItem(p, id, so()); return true; });
+  h['sequence.clear'] = () => mutate(async (p) => { Q().ensureSequence(p).items = []; return true; });
+  // editor: lama, inserisci/sovrascrivi, sposta, accorcia (tempi in frame di timeline relativi alla sequenza)
+  h['sequence.split'] = (id, atRecord) => mutate(async (p) => { const r = Q().splitItem(p, id, atRecord, so()); return { leftId: r.left.id, rightId: r.right.id }; });
+  h['sequence.place'] = (spec) => mutate(async (p) => ({ itemId: Q().placeClip(p, spec, so()).id }));
+  h['sequence.move'] = (id, pos) => mutate(async (p) => ({ itemId: Q().moveClip(p, id, pos, so()).id }));
+  h['sequence.trimEdge'] = (id, edge, delta) => mutate(async (p) => { Q().trimEdge(p, id, edge, delta, so()); return true; });
 
   // Master = un solo take continuo sulle righe date (sostituisce la sequenza). Servono le coperture del take.
   h['sequence.setMaster'] = ({ takeId, lineIds } = {}) => mutate(async (p) => {
     takeOrThrow(p, takeId);
     if (!Array.isArray(lineIds) || lineIds.length === 0) throw new Error('Nessuna riga per il master');
     const cov = sync.coverageForTake(p, takeId);
-    const picked = lineIds.map((l) => {
-      const c = cov.find((x) => x.lineId === l);
-      if (!c) throw new Error(`il take "${takeId}" non copre la riga "${l}"`);
-      return c;
-    });
+    const picked = lineIds.map((l) => cov.find((x) => x.lineId === l)).filter(Boolean);
+    if (!picked.length) throw new Error(`il take "${takeId}" non copre nessuna delle righe scelte`);
     const lineStarts = Object.fromEntries(picked.map((c) => [c.lineId, c.startFrame]));
     const seq = Q().ensureSequence(p);
     seq.items = [];
     return Q().addItem(p, {
-      kind: 'line', lineIds: [...lineIds], takeId, role: 'master', track: 1, lineStarts,
+      kind: 'line', lineIds: picked.map((c) => c.lineId), takeId, role: 'master', track: 1, lineStarts,
       startFrame: Math.min(...picked.map((c) => c.startFrame)), endFrame: Math.max(...picked.map((c) => c.endFrame)),
     });
   });
   h['sequence.addCutaway'] = (spec) => mutate(async (p) => Q().addCutaway(p, null, spec));
   h['sequence.trimCutaway'] = (itemId, patch) => mutate(async (p) => Q().trimCutaway(p, null, itemId, patch));
 
-  // Senza `plan` costruisce il piano dalla sequenza del progetto (toAppendPlanDetailed); con `plan` lo esegue com'e'.
-  h['sequence.assemble'] = async ({ plan, timelineName, withAudio = false } = {}) => {
+  // Manda la sequenza in Resolve. mode 'new' = timeline nuova; 'append' = in coda alla timeline aperta.
+  // lineMarkers: marker blu sulla timeline all'inizio di ogni riga dello script (customData 'ce:line:<id>').
+  h['sequence.assemble'] = async ({ plan, timelineName, withAudio = true, mode = 'auto', lineMarkers = true } = {}) => {
     const p = state.project;
     let steps = plan;
     const extraSkipped = [];
+    let markers = [];
     if (!Array.isArray(plan)) {
       const seq = state.need().sequence;
       if (!seq || !seq.items.length) throw new Error('Sequenza vuota: costruiscila prima di montare');
-      const d = Q().toAppendPlanDetailed(seq, { startFrame: 0, withAudio });
+      try { const env = await bridge.getEnv(); if (env.timelineFps) state.meta.timelineFps = env.timelineFps; } catch { /* fps del progetto non letto */ }
+      const o = state.seqOpts(p);
+      const d = Q().toAppendPlanDetailed(seq, { startFrame: 0, withAudio, ...o });
       steps = d.plan;
-      for (const s of d.skipped) extraSkipped.push({ clipId: seq.items.find((i) => i.id === s.itemId)?.clipId, reason: s.reason });
+      for (const s of d.skipped) extraSkipped.push({ clipId: seq.items.find((i) => i.id === s.itemId)?.clipId, reason: 'cutaway su righe che non sono nel master' });
+      if (lineMarkers) {
+        markers = Q().lineMarkers(seq, o).map((m) => {
+          const l = sync.getLine(p, m.lineId);
+          const label = l ? `${l.character ? `${l.character}: ` : ''}${l.text}` : m.lineId;
+          return { recordFrame: m.recordFrame, color: 'Blue', name: label.slice(0, 60), note: label.slice(0, 500), duration: 1, customData: `ce:line:${m.lineId}` };
+        });
+      }
     } else if (plan.length === 0) throw new Error('Piano di montaggio mancante o vuoto');
     const resolved = steps.map((e) => {
       if (e.clipId || !p) return e;
       const t = sync.getTake(p, e.takeId);
       return t ? { ...e, clipId: t.clipId } : e;
     });
-    const r = await bridge.executeAppendPlan(resolved, { timelineName, withAudio });
+    const r = await bridge.executeAppendPlan(resolved, { timelineName, withAudio, mode, markers });
     r.skipped = [...extraSkipped, ...(r.skipped || [])];
     notify(state.snapshot());
     return r;
+  };
+
+  // Sottotitoli dalle righe della sequenza (SRT). Ritorna il testo; con save:true chiede dove salvarlo e, con
+  // importToResolve:true, prova a importarlo nel Media Pool (sperimentale: se non riesce, File > Importa > Sottotitoli).
+  h['sequence.subtitles'] = async ({ save = false, importToResolve = false } = {}) => {
+    const p = state.need();
+    const seq = p.sequence;
+    if (!seq || !seq.items.length) throw new Error('Sequenza vuota');
+    const o = state.seqOpts(p);
+    const lay = Q().sequenceLayout(seq, o);
+    const marks = Q().lineMarkers(seq, o).filter((m) => sync.getLine(p, m.lineId)?.type === 'dialogue');
+    const fps = state.meta.timelineFps || 25;
+    const tc = (f) => {
+      const ms = Math.round((f / fps) * 1000);
+      const z = (n, w = 2) => String(n).padStart(w, '0');
+      return `${z(Math.floor(ms / 3600000))}:${z(Math.floor(ms / 60000) % 60)}:${z(Math.floor(ms / 1000) % 60)},${z(ms % 1000, 3)}`;
+    };
+    const cues = [];
+    marks.forEach((m, i) => {
+      const line = sync.getLine(p, m.lineId);
+      const take = m.takeId;
+      const cov = sync.coverageForTake(p, take).find((c) => c.lineId === m.lineId);
+      const len = cov ? Math.round((cov.endFrame - cov.startFrame) * (fps / (p.clips[sync.getTake(p, take).clipId].fps || fps))) : 2 * fps;
+      const nextAt = marks[i + 1]?.recordFrame ?? lay.total;
+      const end = Math.min(m.recordFrame + len, nextAt);
+      if (end > m.recordFrame) cues.push(`${cues.length + 1}\n${tc(m.recordFrame)} --> ${tc(end)}\n${line.text}\n`);
+    });
+    const srt = cues.join('\n');
+    const out = { ok: cues.length > 0, cues: cues.length, srt };
+    if (!cues.length) out.reason = 'nessuna battuta nel master';
+    if (save && cues.length) {
+      if (!showSaveDialog || !writeBinary) throw new Error('Salvataggio file non configurato');
+      const path = await showSaveDialog({ suggestedName: `${(seq.name || 'sequenza').replace(/[\\/:*?"<>|]/g, '_')}.srt`, filters: [{ name: 'Sottotitoli SRT', extensions: ['srt'] }] });
+      if (!path) return { ...out, saved: null };
+      await writeBinary(path, b64(srt));
+      out.saved = path;
+      if (importToResolve) out.imported = await bridge.importMedia([path]);
+    }
+    return out;
   };
 
   h.saveFile = async ({ suggestedName, dataBase64, filters } = {}) => {
@@ -488,15 +806,17 @@ function createHandlers(deps) {
     if (!showSaveDialog || !writeBinary) throw new Error('Salvataggio file non configurato');
     const path = await showSaveDialog({ suggestedName: suggestedName || 'esportazione', filters: filters || [] });
     if (!path) return null;
-    await writeBinary(path, Buffer.from(dataBase64, 'base64'));
+    await writeBinary(path, typeof Buffer !== 'undefined' ? Buffer.from(dataBase64, 'base64') : Uint8Array.from(atob(dataBase64), (c) => c.charCodeAt(0)));
     return { path };
   };
 
   h.runDiagnostics = async () => {
     const report = await bridge.runDiagnostics();
+    report.plugin = { version: deps.version || null, takes: state.project?.takes?.length ?? 0, lines: state.project?.scriptDoc?.lines?.length ?? 0 };
     const path = diagPath || 'continuityedit_diag.json';
-    await writeFile(path, JSON.stringify(report, null, 2));
-    return { ok: report.ok, path };
+    let saved = true;
+    try { await writeFile(path, JSON.stringify(report, null, 2)); } catch { saved = false; }
+    return { ok: report.ok, path: saved ? path : null, report };
   };
 
   return h;
@@ -504,15 +824,16 @@ function createHandlers(deps) {
 
 // Nomi dei metodi del contratto (usati da main.js per registrare ipcMain.handle('ce:<nome>')).
 const METHOD_NAMES = [
-  'getEnv', 'pickScriptFile', 'loadScript', 'getSelectedClips', 'addTake', 'removeTake', 'transcribeClips',
-  'getTranscribeStatus', 'autoSync', 'addAnchor', 'moveAnchor', 'removeAnchor', 'anchorFromMarker',
-  'anchorFromPlayhead', 'getState', 'setSelection', 'setNote', 'saveProject', 'loadProject', 'previewLine',
-  'assemble', 'writeMarkers', 'runDiagnostics',
-  'listBins', 'loadBins', 'detectGroups', 'detectGroupsByCoverage', 'suggestMaster', 'setTakeShot', 'setTakeGroup', 'getClipMediaPath', 'board.addStill', 'board.removeItem', 'board.refreshStillViaResolve', 'saveFile',
+  'getEnv', 'checkProject', 'pickScriptFile', 'loadScript', 'scriptFromTranscripts', 'getSelectedClips', 'takeStatus', 'addTake', 'removeTake', 'transcribeClips',
+  'getTranscribeStatus', 'autoSync', 'getTranscript', 'searchSpeech', 'addAnchor', 'moveAnchor', 'removeAnchor', 'anchorFromMarker',
+  'anchorFromPlayhead', 'getState', 'setSelection', 'setNote', 'saveProject', 'loadProject', 'previewLine', 'revealInResolve',
+  'assemble', 'writeMarkers', 'writeToResolve', 'timelineUsage', 'timelinePlayhead', 'seekTimeline', 'runDiagnostics',
+  'listBins', 'loadBins', 'detectGroups', 'detectGroupsByCoverage', 'suggestMaster', 'setTakeShot', 'setTakeGroup', 'setTakeLabel', 'getClipMediaPath', 'board.addStill', 'board.removeItem', 'board.refreshStillViaResolve', 'saveFile',
   'editScript', 'undo', 'redo', 'setMark', 'setGradePalette',
-  'sequence.fromLines', 'sequence.addItem', 'sequence.moveItem', 'sequence.trimItem', 'sequence.removeItem',
-  'sequence.setMaster', 'sequence.addCutaway', 'sequence.trimCutaway', 'sequence.assemble',
+  'sequence.fromLines', 'sequence.addItem', 'sequence.moveItem', 'sequence.trimItem', 'sequence.removeItem', 'sequence.clear',
+  'sequence.split', 'sequence.place', 'sequence.move', 'sequence.trimEdge',
+  'sequence.setMaster', 'sequence.addCutaway', 'sequence.trimCutaway', 'sequence.assemble', 'sequence.subtitles',
   'board.addItem', 'board.moveItem', 'board.resizeItem', 'board.setCaption', 'board.bringToFront', 'board.link', 'board.toSequence',
 ];
 
-module.exports = { createHandlers, METHOD_NAMES };
+if (typeof module !== 'undefined') module.exports = { createHandlers, METHOD_NAMES };

@@ -207,18 +207,29 @@ function deriveCutaway(project, it) {
   return it;
 }
 
-function masterRecords(seq) {
+// Conversione di una durata in frame sorgente (al fps della clip) in frame di timeline. Senza fps noti: identita'.
+// Una clip a 50 fps su una timeline a 25 dura la meta' dei suoi frame sorgente (Resolve la riproduce a velocita' reale).
+export function makeConv({ timelineFps, clipFps } = {}) {
+  return (frames, clipId) => {
+    const cf = clipFps?.[clipId];
+    if (!(timelineFps > 0) || !(cf > 0) || Math.abs(cf - timelineFps) < 0.01) return frames;
+    return Math.round((frames * timelineFps) / cf);
+  };
+}
+const ID = (f) => f;
+
+function masterRecords(seq, conv = ID) {
   const rec = new Map();
   let cursor = 0;
-  for (const it of seq.items) if (isMaster(it)) { rec.set(it.id, cursor); cursor += it.endFrame - it.startFrame; }
+  for (const it of seq.items) if (isMaster(it)) { rec.set(it.id, cursor); cursor += conv(it.endFrame - it.startFrame, it.clipId); }
   return rec;
 }
 
 // Posizione (relativa alla sequenza) in cui il cutaway inizia nel tempo di timeline, o null se nessun master ha la riga.
-function cutawayRecord(seq, it, rec = masterRecords(seq)) {
+function cutawayRecord(seq, it, rec = masterRecords(seq), conv = ID) {
   const m = seq.items.find((x) => isMaster(x) && x.lineIds.includes(it.fromLineId));
   if (!m) return null;
-  return Math.max(0, rec.get(m.id) + ((m.lineStarts?.[it.fromLineId] ?? m.startFrame) - m.startFrame) + (it.startOffsetFrames || 0));
+  return Math.max(0, rec.get(m.id) + conv((m.lineStarts?.[it.fromLineId] ?? m.startFrame) - m.startFrame, m.clipId) + conv(it.startOffsetFrames || 0, it.clipId));
 }
 
 function freeTrack(seq, it) {
@@ -271,16 +282,18 @@ export function trimCutaway(project, sequence, itemId, patch = {}) {
 }
 
 // Piano per AppendToTimeline con skipped (cutaway senza master sulla riga). Vedi toAppendPlan.
-export function toAppendPlanDetailed(sequence, { startFrame = 0, withAudio = false, audioTrack = 1 } = {}) {
+// opts.timelineFps + opts.clipFps ({clipId: fps}) convertono le durate sorgente in frame di timeline (clip a fps diverso).
+export function toAppendPlanDetailed(sequence, { startFrame = 0, withAudio = false, audioTrack = 1, timelineFps, clipFps } = {}) {
   const plan = [];
   const skipped = [];
-  const rec = masterRecords(sequence);
+  const conv = makeConv({ timelineFps, clipFps });
+  const rec = masterRecords(sequence, conv);
   let cursor = 0;
   for (const it of sequence.items) {
-    const len = it.endFrame - it.startFrame;
+    const len = conv(it.endFrame - it.startFrame, it.clipId);
     let rel;
     if (isMaster(it)) { rel = cursor; cursor += len; } else if (it.role === 'cutaway' && it.fromLineId !== undefined) {
-      rel = cutawayRecord(sequence, it, rec);
+      rel = cutawayRecord(sequence, it, rec, conv);
       if (rel == null) { skipped.push({ itemId: it.id, reason: 'master-assente-sulla-riga' }); continue; }
     } else rel = it.recordFrame ?? cursor;
     const entry = { takeId: it.takeId, clipId: it.clipId, startFrame: it.startFrame, endFrame: it.endFrame, trackIndex: it.track, recordFrame: startFrame + rel };
@@ -294,3 +307,233 @@ export function toAppendPlanDetailed(sequence, { startFrame = 0, withAudio = fal
 // master: recordFrame contiguo da `startFrame`. cutaway con fromLineId: recordFrame = recordFrame del master alla riga
 // fromLineId (inizio copertura) + startOffsetFrames, durata = end-start sorgente, mai audio. Altri: item.recordFrame o cursore.
 export const toAppendPlan = (sequence, opts) => toAppendPlanDetailed(sequence, opts).plan;
+
+// Marker di timeline per le righe dello script: dove inizia ogni riga nel master (frame relativi all'inizio sequenza).
+// Ritorna [{ recordFrame, lineId, takeId }] in ordine di tempo.
+export function lineMarkers(sequence, opts = {}) {
+  const conv = makeConv(opts);
+  const rec = masterRecords(sequence, conv);
+  const out = [];
+  for (const it of sequence.items) {
+    if (!isMaster(it)) continue;
+    for (const lineId of it.lineIds || []) {
+      const src = it.lineStarts?.[lineId];
+      if (!Number.isFinite(src) || src < it.startFrame || src >= it.endFrame) continue;
+      out.push({ recordFrame: rec.get(it.id) + conv(src - it.startFrame, it.clipId), lineId, takeId: it.takeId });
+    }
+  }
+  return out.sort((a, b) => a.recordFrame - b.recordFrame);
+}
+
+// ================================================================ editor di sequenza (mini-montaggio nel pannello)
+// Regole semplici e prevedibili:
+//  - V1 e' sempre continua (a pettine): inserire, togliere o accorciare un pezzo sposta i successivi (ripple).
+//  - V2, V3... sono libere: i pezzi stanno dove li metti; un pezzo nuovo SOVRASCRIVE quello che trova sotto.
+//  - Un cutaway "agganciato alle righe" (fromLineId..toLineId) segue il master; spostarlo a mano lo rende libero.
+// Tempi del record: frame di timeline relativi all'inizio della sequenza (opts.timelineFps/clipFps per fps diversi).
+
+// Layout in tempo di timeline: [{ id, track, rec, len, role, anchored, takeId, clipId, startFrame, endFrame, lineIds }].
+// I cutaway agganciati a righe che non sono nel master hanno rec null (non si possono montare).
+export function sequenceLayout(sequence, opts = {}) {
+  const conv = makeConv(opts);
+  const rec = masterRecords(sequence, conv);
+  let cursor = 0;
+  const items = [];
+  for (const it of sequence?.items || []) {
+    const len = conv(it.endFrame - it.startFrame, it.clipId);
+    let r;
+    if (isMaster(it)) { r = cursor; cursor += len; } else if (it.fromLineId !== undefined) r = cutawayRecord(sequence, it, rec, conv);
+    else r = it.recordFrame ?? cursor;
+    items.push({
+      id: it.id, track: isMaster(it) ? 1 : it.track, rec: r, len, role: isMaster(it) ? 'master' : it.role, anchored: it.fromLineId !== undefined,
+      takeId: it.takeId, clipId: it.clipId, startFrame: it.startFrame, endFrame: it.endFrame, lineIds: [...(it.lineIds || [])],
+    });
+  }
+  const total = items.reduce((m, x) => (x.rec == null ? m : Math.max(m, x.rec + x.len)), 0);
+  return { items, total };
+}
+
+// durata di timeline -> frame sorgente della clip (inverso di makeConv)
+function toSrc(opts, frames, clipId) {
+  const cf = opts.clipFps?.[clipId]; const tf = opts.timelineFps;
+  if (!(tf > 0) || !(cf > 0) || Math.abs(cf - tf) < 0.01) return Math.round(frames);
+  return Math.round((frames * cf) / tf);
+}
+
+const layoutOf = (seq, id, opts) => {
+  const L = sequenceLayout(seq, opts);
+  const x = L.items.find((i) => i.id === id);
+  if (!x) throw new Error(`item sconosciuto "${id}"`);
+  return { L, x };
+};
+
+// Rende libero un cutaway agganciato (stessa posizione e stesso materiale).
+function detach(it, rec) {
+  if (it.fromLineId === undefined) return it;
+  delete it.fromLineId; delete it.toLineId; delete it.startOffsetFrames; delete it.endOffsetFrames;
+  it.recordFrame = rec;
+  return it;
+}
+
+function masterLinesFor(project, it) {
+  const cov = coverageForTake(project, it.takeId);
+  const inRange = cov.filter((c) => c.startFrame >= it.startFrame && c.startFrame < it.endFrame);
+  it.lineIds = inRange.map((c) => c.lineId);
+  it.lineStarts = Object.fromEntries(inRange.map((c) => [c.lineId, c.startFrame]));
+  return it;
+}
+
+/** Taglia (lama) un pezzo nel punto `atRecord` (tempo di sequenza). Ritorna { left, right }. */
+export function splitItem(project, id, atRecord, opts = {}) {
+  const seq = ensureSequence(project);
+  const { x } = layoutOf(seq, id, opts);
+  if (x.rec == null) throw new Error('questo pezzo non ha una posizione nella sequenza');
+  const off = Math.round(atRecord) - x.rec;
+  if (off <= 0 || off >= x.len) throw new Error('il punto di taglio deve stare dentro il pezzo');
+  const i = seq.items.findIndex((t) => t.id === id);
+  const it = seq.items[i];
+  const cut = Math.min(it.endFrame - 1, Math.max(it.startFrame + 1, it.startFrame + toSrc(opts, off, it.clipId)));
+  const right = { ...structuredClone(it), id: nextItemId(seq), startFrame: cut };
+  it.endFrame = cut;
+  if (isMaster(it)) {
+    const ls = it.lineStarts || {};
+    it.lineIds = (it.lineIds || []).filter((l) => !(Number.isFinite(ls[l]) && ls[l] >= cut));
+    right.lineIds = (right.lineIds || []).filter((l) => Number.isFinite(ls[l]) && ls[l] >= cut);
+    it.lineStarts = Object.fromEntries(Object.entries(ls).filter(([l]) => it.lineIds.includes(l)));
+    right.lineStarts = Object.fromEntries(Object.entries(ls).filter(([l]) => right.lineIds.includes(l)));
+  } else {
+    detach(it, x.rec);
+    detach(right, x.rec);
+    right.recordFrame = x.rec + off;
+  }
+  seq.items.splice(i + 1, 0, right);
+  return { left: it, right };
+}
+
+// Libera l'intervallo [from, to) sulla traccia >= 2: toglie, accorcia o spezza i pezzi che ci cadono sopra.
+function clearRange(project, seq, track, from, to, opts, exceptId = null) {
+  for (const x of sequenceLayout(seq, opts).items) {
+    if (x.id === exceptId || x.track !== track || x.role === 'master' || x.rec == null) continue;
+    const a = x.rec; const b = x.rec + x.len;
+    if (b <= from || a >= to) continue;
+    const it = seq.items.find((t) => t.id === x.id);
+    detach(it, a);
+    if (a >= from && b <= to) { seq.items.splice(seq.items.indexOf(it), 1); continue; }
+    if (a < from && b > to) { // il nuovo pezzo cade nel mezzo: si spezza in due
+      const tail = { ...structuredClone(it), id: nextItemId(seq), startFrame: it.startFrame + toSrc(opts, to - a, it.clipId), recordFrame: to };
+      it.endFrame = it.startFrame + toSrc(opts, from - a, it.clipId);
+      seq.items.push(tail);
+      continue;
+    }
+    if (a < from) it.endFrame = Math.max(it.startFrame + 1, it.startFrame + toSrc(opts, from - a, it.clipId));
+    else { const cutSrc = toSrc(opts, to - a, it.clipId); it.startFrame = Math.min(it.endFrame - 1, it.startFrame + cutSrc); it.recordFrame = to; }
+  }
+}
+
+/**
+ * Mette un pezzo di take nella sequenza.
+ * spec: { takeId, startFrame, endFrame (sorgente, fine esclusa), track (1 = V1), recordFrame (tempo di sequenza),
+ *         mode: 'insert' (V1: spinge avanti il resto) | 'overwrite' (sostituisce cio' che c'e' sotto), id? }
+ */
+export function placeClip(project, spec, opts = {}) {
+  const seq = ensureSequence(project);
+  const track = spec.track ?? 1;
+  if (!Number.isInteger(track) || track < 1) throw new Error('traccia non valida');
+  const { clip } = clipOf(project, spec.takeId);
+  const startFrame = clamp(Math.round(spec.startFrame), 0, clip.durationFrames - 1);
+  const endFrame = clamp(Math.round(spec.endFrame), startFrame + 1, clip.durationFrames);
+  const take = getTake(project, spec.takeId);
+  const rec = Math.max(0, Math.round(spec.recordFrame ?? 0));
+  const len = makeConv(opts)(endFrame - startFrame, take.clipId);
+  if (track === 1) {
+    const L = sequenceLayout(seq, opts);
+    const masters = L.items.filter((x) => x.role === 'master');
+    // punto di inserimento: se cade dentro un pezzo, prima lo si taglia
+    const inside = masters.find((x) => rec > x.rec && rec < x.rec + x.len);
+    if (inside) splitItem(project, inside.id, rec, opts);
+    if (spec.mode === 'overwrite') {
+      const end = rec + len;
+      const L2 = sequenceLayout(seq, opts).items.filter((x) => x.role === 'master');
+      const inside2 = L2.find((x) => end > x.rec && end < x.rec + x.len);
+      if (inside2) splitItem(project, inside2.id, end, opts);
+      const gone = new Set(sequenceLayout(seq, opts).items.filter((x) => x.role === 'master' && x.rec >= rec && x.rec + x.len <= end).map((x) => x.id));
+      seq.items = seq.items.filter((t) => !gone.has(t.id));
+    }
+    const after = sequenceLayout(seq, opts).items.filter((x) => x.role === 'master');
+    const next = after.find((x) => x.rec >= rec);
+    const idx = next ? seq.items.findIndex((t) => t.id === next.id) : seq.items.length;
+    const it = makeItem(project, seq, { id: spec.id, kind: 'clip', takeId: spec.takeId, startFrame, endFrame, role: 'master', track: 1 });
+    masterLinesFor(project, it);
+    seq.items.splice(idx, 0, it);
+    return it;
+  }
+  clearRange(project, seq, track, rec, rec + len, opts);
+  const it = makeItem(project, seq, { id: spec.id, kind: 'clip', takeId: spec.takeId, startFrame, endFrame, role: 'cutaway', track, recordFrame: rec });
+  seq.items.push(it);
+  return it;
+}
+
+/** Sposta un pezzo: su V1 cambia l'ordine (ripple), su V2+ lo mette libero al nuovo tempo sovrascrivendo. */
+export function moveClip(project, id, { recordFrame, track } = {}, opts = {}) {
+  const seq = ensureSequence(project);
+  const { x } = layoutOf(seq, id, opts);
+  const it = seq.items.find((t) => t.id === id);
+  const toTrack = track ?? x.track;
+  const at = Math.max(0, Math.round(recordFrame ?? x.rec ?? 0));
+  if (x.role === 'master' && toTrack === 1) {
+    // riordino: il pezzo va prima del master il cui centro sta dopo il punto di rilascio
+    seq.items.splice(seq.items.indexOf(it), 1);
+    const L = sequenceLayout(seq, opts).items.filter((m) => m.role === 'master');
+    const next = L.find((m) => m.rec + m.len / 2 > at);
+    seq.items.splice(next ? seq.items.findIndex((t) => t.id === next.id) : seq.items.length, 0, it);
+    return it;
+  }
+  const spec = { id, takeId: it.takeId, startFrame: it.startFrame, endFrame: it.endFrame, track: toTrack, recordFrame: at, mode: toTrack === 1 ? 'insert' : 'overwrite' };
+  if (isMaster(it)) freezeDependents(seq, it, opts);
+  seq.items.splice(seq.items.indexOf(it), 1);
+  return placeClip(project, spec, opts);
+}
+
+// I cutaway agganciati alle righe di un master che sta per sparire diventano liberi nella posizione attuale.
+function freezeDependents(seq, master, opts) {
+  const L = sequenceLayout(seq, opts).items;
+  for (const c of seq.items) {
+    if (c.fromLineId === undefined || !(master.lineIds || []).includes(c.fromLineId)) continue;
+    const rec = L.find((x) => x.id === c.id)?.rec;
+    if (rec != null) detach(c, rec);
+  }
+}
+
+/** Toglie un pezzo (su V1 i successivi si avvicinano). I cutaway agganciati a quel master restano dove sono. */
+export function deleteItem(project, id, opts = {}) {
+  const seq = ensureSequence(project);
+  const it = seq.items.find((t) => t.id === id);
+  if (!it) throw new Error(`item sconosciuto "${id}"`);
+  if (isMaster(it)) freezeDependents(seq, it, opts);
+  seq.items.splice(seq.items.indexOf(it), 1);
+  return it;
+}
+
+/**
+ * Accorcia/allunga un bordo del pezzo di `delta` frame di timeline (positivo = verso destra).
+ * V1: ripple (i successivi si spostano). Cutaway agganciato: cambia l'offset. Cutaway libero: sposta il bordo.
+ */
+export function trimEdge(project, id, edge, delta, opts = {}) {
+  const seq = ensureSequence(project);
+  const { x } = layoutOf(seq, id, opts);
+  const it = seq.items.find((t) => t.id === id);
+  const dur = project.clips[it.clipId].durationFrames;
+  const d = toSrc(opts, Math.round(delta), it.clipId);
+  if (!d) return it;
+  if (edge !== 'start' && edge !== 'end') throw new Error('bordo non valido');
+  if (it.fromLineId !== undefined) {
+    const patch = edge === 'start' ? { startOffsetFrames: (it.startOffsetFrames || 0) + d } : { endOffsetFrames: (it.endOffsetFrames || 0) + d };
+    return trimCutaway(project, seq, id, patch);
+  }
+  if (edge === 'start') {
+    const s = clamp(it.startFrame + d, 0, it.endFrame - 1);
+    if (!isMaster(it) && x.rec != null) it.recordFrame = Math.max(0, x.rec + makeConv(opts)(s - it.startFrame, it.clipId));
+    it.startFrame = s;
+  } else it.endFrame = clamp(it.endFrame + d, it.startFrame + 1, dur);
+  return it;
+}

@@ -8,7 +8,8 @@ import path from 'node:path';
 import * as sync from '../src/sync/index.js';
 import { parseResolveTranscript } from '../src/transcript/parse.js';
 import { alignClip } from '../src/align/index.js';
-import { parseFdx, parsePdf, applyScriptEdit } from '../src/script/index.js';
+import { parseFdx, parsePdf, applyScriptEdit, diffRevision, applyRevision, scriptFromTranscripts } from '../src/script/index.js';
+import { searchTranscripts } from '../src/search/phrase.js';
 import * as sequence from '../src/sequence/index.js';
 import * as board from '../src/board/index.js';
 import { createBridge } from '../src/bridge/resolveBridge.js';
@@ -37,10 +38,10 @@ async function setup({ withScript = true, persist } = {}) {
   });
   const events = []; const saved = []; const mkdirs = [];
   const exported = () => f.clips.flatMap((c) => c.exported);
-  const state = createState(sync);
+  const state = createState(sync, sequence);
   const media = createMediaRegistry({ randomToken: (() => { let n = 0; return () => `tok${++n}`; })() });
   const h = createHandlers({
-    core: { sync, parseResolveTranscript, alignClip, parseFdx, parsePdf, applyScriptEdit, sequence, board },
+    core: { sync, parseResolveTranscript, alignClip, parseFdx, parsePdf, applyScriptEdit, diffRevision, applyRevision, scriptFromTranscripts, searchTranscripts, sequence, board },
     bridge: createBridge(f.resolve, { fileExists: (p) => exported().includes(p) }), state,
     notify: (s) => events.push(s), media, persist,
     readFile: async () => Buffer.from(FDX),
@@ -87,8 +88,12 @@ test('loadBins: errori italiani', async () => {
   const { h } = await setup();
   await assert.rejects(() => h.loadBins([]), /Nessun bin/);
   await assert.rejects(() => h.loadBins(['Fantasma']), /Bin non trovati: Fantasma/);
+  // v0.1.0: i bin si possono caricare PRIMA della sceneggiatura (progetto vuoto creato al volo)
   const t = await setup({ withScript: false });
-  await assert.rejects(() => t.h.loadBins(['Scena 1']), /script/i);
+  const clips = await t.h.loadBins(['Scena 1']);
+  assert.equal(clips.length, 2);
+  assert.equal(t.state.project.scriptDoc.lines.length, 0);
+  assert.equal(t.state.project.takes.length, 2);
 });
 
 test('detectGroups + setTakeGroup: gruppo per metadati, assegnamento e persistenza nel progetto', async () => {
@@ -114,7 +119,7 @@ test('getClipMediaPath: da takeId', async () => {
   const { h } = await setup();
   await h.loadBins(['Scena 1']);
   const r = await h.getClipMediaPath('T1');
-  assert.deepEqual(r, { path: '/m/a1.mov', proxyPath: null, codec: 'H.264', fps: 25, startTcFrames: 90000, url: 'ce-media://clip/tok1', proxyUrl: null });
+  assert.deepEqual(r, { ok: true, path: '/m/a1.mov', proxyPath: null, codec: 'H.264', fps: 25, startTcFrames: 90000, url: 'ce-media://clip/tok1', proxyUrl: null });
   assert.equal((await h.getClipMediaPath('T2')).ok, false);
 });
 
@@ -204,8 +209,8 @@ test('sequence.assemble: esegue un piano (clipId o takeId) e notifica', async ()
       { takeId: 'T2', startFrame: 0, endFrame: 40, trackIndex: 2, recordFrame: 0, mediaType: 1 },
     ],
   });
-  assert.deepEqual(r, { ok: true, timelineName: 'Regia', itemsAdded: 2, tracksCreated: 1, skipped: [] });
-  assert.deepEqual(f.res.appended.flat().map((x) => x.id), ['a1', 'b1']);
+  assert.deepEqual(r, { ok: true, timelineName: 'Regia', itemsAdded: 2, tracksCreated: 1, markersAdded: 0, baseFrame: 90000, skipped: [] });
+  assert.deepEqual(f.res.appended.flat().map((x) => [x.id, x.recordFrame]), [['a1', 90000], ['b1', 90000]]);
   assert.equal(events.length, n + 1);
   await assert.rejects(() => h['sequence.assemble']({ timelineName: 'x' }), /Sequenza vuota/);
   await assert.rejects(() => h['sequence.assemble']({ plan: [] }), /Piano/);
@@ -297,10 +302,12 @@ test('sequence: setMaster + addCutaway + trimCutaway + assemble da sequenza (V1 
   const r = await t.h['sequence.assemble']({ timelineName: 'Regia', withAudio: true });
   assert.equal(r.ok, true);
   assert.equal(r.tracksCreated, 1);
-  assert.equal(r.itemsAdded, 3); // master V1 + audio master + cutaway V2
+  assert.equal(r.itemsAdded, 2); // master V1 con audio collegato + cutaway V2
   const calls = t.f.res.appended.flat();
-  assert.deepEqual(calls.map((x) => [x.id, x.trackIndex, x.mediaType]), [['a1', 1, 1], ['a1', 1, 2], ['b1', 2, 1]]);
-  assert.equal(calls[2].recordFrame, 5);
+  assert.deepEqual(calls.map((x) => [x.id, x.trackIndex, x.mediaType]), [['a1', 1, undefined], ['b1', 2, 1]]);
+  assert.equal(calls[1].recordFrame, 90005); // inizio timeline + 5 frame di offset
+  assert.equal(r.markersAdded, 1); // marker blu sulla riga del master
+  assert.equal(Object.values(t.f.res.timelines[0].markers)[0].customData, `ce:line:${lA.id}`);
   assert.equal(await t.h['sequence.removeItem'](c.id), true);
   assert.equal(t.state.project.sequence.items.length, 1);
 });

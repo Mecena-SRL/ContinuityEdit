@@ -4,27 +4,29 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>ContinuityEdit (harness)</title>
+  <link rel="icon" href="data:,">
   <link rel="stylesheet" href="../css/app.css">
   <style>
-    #devbar { position: fixed; right: 8px; bottom: 2px; z-index: 50; background: #222; color: #ccc; font: 11px sans-serif; padding: 4px 8px; border: 1px solid #444; border-radius: 6px; display: flex; gap: 6px; align-items: center; opacity: .9; }
+    #devbar { position: fixed; right: 8px; bottom: 30px; z-index: 50; background: #222; color: #ccc; font: 11px sans-serif; padding: 4px 8px; border: 1px solid #444; border-radius: 6px; display: flex; gap: 6px; align-items: center; opacity: .85; }
     #devbar input { width: 70px; background: #111; color: #eee; border: 1px solid #555; border-radius: 4px; }
+    #devbar[hidden] { display: none; }
   </style>
 </head>
 <body>
-  <a class="skip" href="#script">Vai alla sceneggiatura</a>
-  <div id="app">
-    <header id="topbar" class="topbar" aria-label="Barra superiore"></header>
-    <section id="takes" class="takes" aria-label="Clip e take"></section>
-    <main id="script" class="script" aria-label="Sceneggiatura" tabindex="-1"></main>
-    <aside id="dock" class="dock" aria-label="Ancore, confronto, assemblaggio e note"></aside>
-    <footer id="status" class="status" role="status"></footer>
-  </div>
-  <div id="toasts" class="toasts" aria-live="polite"></div>
-  <label id="devbar">Playhead simulato (frame) <input id="dev-ph" type="number" value="150"></label>
+  <div id="root"></div>
+  <label id="devbar" hidden>Playhead timeline (frame) <input id="dev-ph" type="number" value="90000"></label>
   <script type="module">
-    import { createMockCe } from './mockCe.js';
-    window.ce = createMockCe({ undecodable: location.search.includes('undecodable') });
-    document.getElementById('dev-ph').addEventListener('input', (e) => { window.ce.__state.playheadFrame = e.target.value === '' ? null : parseInt(e.target.value, 10); });
+    // ?seed=1: progetto gia' lavorato; ?rev=1: il prossimo "Importa" carica la revisione dello script; ?devbar=1: barra di prova
+    import { createDevCe } from './devCe.js';
+    const q = new URLSearchParams(location.search);
+    const [handlersSrc, stateSrc] = await Promise.all(['../main/handlers.js', '../main/state.js'].map((p) => fetch(p).then((r) => r.text())));
+    window.ce = await createDevCe({ handlersSrc, stateSrc });
+    if (q.get('rev')) window.ce.__dev.useRevisedScript(true);
+    if (q.get('seed')) await window.ce.__dev.seed({ sequence: q.get('seed') !== 'noseq' });
+    if (q.get('devbar')) {
+      const bar = document.getElementById('devbar'); bar.hidden = false;
+      document.getElementById('dev-ph').addEventListener('input', (e) => window.ce.__dev.setPlayhead(parseInt(e.target.value, 10) || 0));
+    }
     await import('../renderer/app.js');
   </script>
 </body>

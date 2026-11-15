@@ -6,3 +6,4 @@ __pycache__/
 dist/
 assets/icon/AppIcon.icns
 assets/icon/AppIcon.iconset/
+plugin/dev/sample/

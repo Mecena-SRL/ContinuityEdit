@@ -47,14 +47,13 @@ test('durata da Duration quando Frames manca', async () => {
 test('trascrizione: transcribe/status/getTranscription', async () => {
   const f = base();
   const b = createBridge(f.resolve);
-  assert.deepEqual(await b.status(), { jobStatus: 'Inactive' });
+  assert.equal((await b.status()).jobStatus, 'Inactive');
   const r = await b.transcribe(['c1', 'zzz']);
   assert.deepEqual(r.started, ['c1']);
   assert.equal(r.failed[0].clipId, 'zzz');
-  assert.deepEqual(await b.status(), { jobStatus: 'InProgress' });
-  f.clips[0].transcribeStatus = 'Complete';
-  f.clips[0].transcription = syntheticTranscript({ words: ['uno', 'due', 'tre'] });
-  assert.deepEqual(await b.status(), { jobStatus: 'Complete' });
+  assert.deepEqual(await b.status(), { jobStatus: 'InProgress', done: [], pending: ['c1'] });
+  f.clips[0].finishTranscription(syntheticTranscript({ words: ['uno', 'due', 'tre'] }));
+  assert.deepEqual(await b.status(), { jobStatus: 'Complete', done: ['c1'], pending: [] });
   const t = await b.getTranscription('c1');
   assert.equal(t.language, 'it');
   assert.equal(await b.getTranscription('c2'), null);

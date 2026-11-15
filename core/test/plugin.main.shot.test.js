@@ -6,7 +6,8 @@ import { readFile } from 'node:fs/promises';
 import * as sync from '../src/sync/index.js';
 import { parseResolveTranscript } from '../src/transcript/parse.js';
 import { alignClip } from '../src/align/index.js';
-import { parseFdx, parsePdf, applyScriptEdit } from '../src/script/index.js';
+import { parseFdx, parsePdf, applyScriptEdit, diffRevision, applyRevision, scriptFromTranscripts } from '../src/script/index.js';
+import { searchTranscripts } from '../src/search/phrase.js';
 import * as sequence from '../src/sequence/index.js';
 import * as board from '../src/board/index.js';
 import { createBridge } from '../src/bridge/resolveBridge.js';
@@ -27,9 +28,9 @@ const props = (cam, extra = {}) => ({ props: { Scene: '1', Shot: '2', Take: '3',
 
 async function setup(items) {
   const f = makeFakeResolve({ bins: [{ name: 'Scena 1', items }] });
-  const state = createState(sync); const events = [];
+  const state = createState(sync, sequence); const events = [];
   const h = createHandlers({
-    core: { sync, parseResolveTranscript, alignClip, parseFdx, parsePdf, applyScriptEdit, sequence, board },
+    core: { sync, parseResolveTranscript, alignClip, parseFdx, parsePdf, applyScriptEdit, diffRevision, applyRevision, scriptFromTranscripts, searchTranscripts, sequence, board },
     bridge: createBridge(f.resolve), state, notify: (s) => events.push(s), readFile: async () => Buffer.from(FDX), writeFile: async () => {}, diagPath: '/d.json',
   });
   await h.loadScript('/s.fdx');

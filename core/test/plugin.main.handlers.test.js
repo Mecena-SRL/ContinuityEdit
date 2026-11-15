@@ -8,7 +8,8 @@ import path from 'node:path';
 import * as sync from '../src/sync/index.js';
 import { parseResolveTranscript } from '../src/transcript/parse.js';
 import { alignClip } from '../src/align/index.js';
-import { parseFdx, parsePdf, applyScriptEdit } from '../src/script/index.js';
+import { parseFdx, parsePdf, applyScriptEdit, diffRevision, applyRevision, scriptFromTranscripts } from '../src/script/index.js';
+import { searchTranscripts } from '../src/search/phrase.js';
 import * as sequence from '../src/sequence/index.js';
 import * as board from '../src/board/index.js';
 import { createBridge } from '../src/bridge/resolveBridge.js';
@@ -37,9 +38,9 @@ async function setup() {
   const files = { '/s.fdx': Buffer.from(FDX) };
   const events = [];
   const written = {};
-  const state = createState(sync);
+  const state = createState(sync, sequence);
   const h = createHandlers({
-    core: { sync, parseResolveTranscript, alignClip, parseFdx, parsePdf, applyScriptEdit, sequence, board },
+    core: { sync, parseResolveTranscript, alignClip, parseFdx, parsePdf, applyScriptEdit, diffRevision, applyRevision, scriptFromTranscripts, searchTranscripts, sequence, board },
     bridge: createBridge(f.resolve), state,
     persist: createPersist({ dir }),
     notify: (s) => events.push(s),
@@ -66,14 +67,14 @@ test('preload e METHOD_NAMES elencano gli stessi metodi', async () => {
 
 test('flusso: loadScript -> addTake -> autoSync -> getState -> sidecar', async () => {
   const t = await setup();
-  await assert.rejects(() => t.h.addTake({ clipId: 'c1' }), /script/i);
+  await assert.rejects(() => t.h.autoSync('T1'), /script/i);
   const picked = await t.h.pickScriptFile();
   assert.equal(picked.name, 's.fdx');
   const r = await t.h.loadScript(picked.path);
   assert.ok(r.scriptDoc.lines.some((l) => l.type === 'dialogue'));
   const { takeId } = await t.h.addTake({ clipId: 'c1' });
   assert.equal(takeId, 'T1');
-  assert.deepEqual(await t.h.getTranscribeStatus(), { jobStatus: 'Inactive' });
+  assert.equal((await t.h.getTranscribeStatus()).jobStatus, 'Inactive');
   const a = await t.h.autoSync(takeId);
   assert.ok(a.added >= 2);
   const { view } = await t.h.getState();
@@ -160,14 +161,18 @@ test('anchorFromPlayhead: converte il playhead e propaga i fallimenti', async ()
   await t.cleanup();
 });
 
-test('loadScript: formato non supportato; script nuovo azzera le ancore ma tiene i take', async () => {
+test('loadScript: formato non supportato; ricaricare lo script = revisione (le ancore restano), fresh azzera', async () => {
   const t = await setup();
   await assert.rejects(() => t.h.loadScript('/x.txt'), /non supportato/);
   await t.h.loadScript('/s.fdx');
   const { takeId } = await t.h.addTake({ clipId: 'c1' });
   const l = t.state.project.scriptDoc.lines.find((x) => x.type === 'action');
   await t.h.addAnchor({ takeId, lineId: l.id, edge: 'start', frame: 5 });
-  await t.h.loadScript('/s.fdx');
+  const r = await t.h.loadScript('/s.fdx');
+  assert.equal(r.revision.tolte, 0);
+  assert.equal(t.state.project.anchors.length, 1);
+  await t.h.undo(); // la revisione si annulla
+  await t.h.loadScript('/s.fdx', { fresh: true });
   assert.equal(t.state.project.anchors.length, 0);
   assert.equal(t.state.project.takes.length, 1);
   await t.cleanup();
