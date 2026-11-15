@@ -4,14 +4,15 @@
 const { contextBridge, ipcRenderer } = require('electron/renderer');
 
 const METHODS = [
-  'getEnv', 'pickScriptFile', 'loadScript', 'getSelectedClips', 'addTake', 'removeTake', 'transcribeClips',
-  'getTranscribeStatus', 'autoSync', 'addAnchor', 'moveAnchor', 'removeAnchor', 'anchorFromMarker',
-  'anchorFromPlayhead', 'getState', 'setSelection', 'setNote', 'saveProject', 'loadProject', 'previewLine',
-  'assemble', 'writeMarkers', 'runDiagnostics',
-  'listBins', 'loadBins', 'detectGroups', 'detectGroupsByCoverage', 'suggestMaster', 'setTakeShot', 'setTakeGroup', 'getClipMediaPath', 'board.addStill', 'board.removeItem', 'board.refreshStillViaResolve', 'saveFile',
+  'getEnv', 'checkProject', 'pickScriptFile', 'loadScript', 'scriptFromTranscripts', 'getSelectedClips', 'addTake', 'removeTake', 'transcribeClips',
+  'getTranscribeStatus', 'autoSync', 'getTranscript', 'searchSpeech', 'addAnchor', 'moveAnchor', 'removeAnchor', 'anchorFromMarker',
+  'anchorFromPlayhead', 'getState', 'setSelection', 'setNote', 'saveProject', 'loadProject', 'previewLine', 'revealInResolve',
+  'assemble', 'writeMarkers', 'writeToResolve', 'timelineUsage', 'timelinePlayhead', 'seekTimeline', 'runDiagnostics',
+  'listBins', 'loadBins', 'detectGroups', 'detectGroupsByCoverage', 'suggestMaster', 'setTakeShot', 'setTakeGroup', 'setTakeLabel', 'getClipMediaPath', 'board.addStill', 'board.removeItem', 'board.refreshStillViaResolve', 'saveFile',
   'editScript', 'undo', 'redo', 'setMark', 'setGradePalette',
-  'sequence.fromLines', 'sequence.addItem', 'sequence.moveItem', 'sequence.trimItem', 'sequence.removeItem',
-  'sequence.setMaster', 'sequence.addCutaway', 'sequence.trimCutaway', 'sequence.assemble',
+  'sequence.fromLines', 'sequence.addItem', 'sequence.moveItem', 'sequence.trimItem', 'sequence.removeItem', 'sequence.clear',
+  'sequence.split', 'sequence.place', 'sequence.move', 'sequence.trimEdge',
+  'sequence.setMaster', 'sequence.addCutaway', 'sequence.trimCutaway', 'sequence.assemble', 'sequence.subtitles',
   'board.addItem', 'board.moveItem', 'board.resizeItem', 'board.setCaption', 'board.bringToFront', 'board.link', 'board.toSequence',
 ];
 

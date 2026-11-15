@@ -76,11 +76,13 @@ async function setup() {
     tmpDir: path.join(os.tmpdir(), 'continuityedit-diag'),
   });
   fs.mkdirSync(path.join(os.tmpdir(), 'continuityedit-diag'), { recursive: true });
-  const state = createState(core.sync);
+  const state = createState(core.sync, core.sequence);
   const persist = createPersist({ dir: path.join(app.getPath('userData'), 'projects') });
+  let version = null;
+  try { version = require('./package.json').version; } catch { /* facoltativo */ }
 
   handlers = createHandlers({
-    core, bridge, state, persist, media: mediaRegistry,
+    core, bridge, state, persist, media: mediaRegistry, version,
     notify: (snap) => {
       if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('ce:changed', snap);
     },

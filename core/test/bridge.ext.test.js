@@ -136,13 +136,15 @@ test('executeAppendPlan: crea timeline, aggiunge livelli V2, passa trackIndex/re
     { clipId: 'a', startFrame: 0, endFrame: 50, trackIndex: 1, recordFrame: 1000, mediaType: 2 },
   ];
   const r = await createBridge(f.resolve).executeAppendPlan(plan, { timelineName: 'Regia' });
-  assert.deepEqual(r, { ok: true, timelineName: 'Regia', itemsAdded: 3, tracksCreated: 1, skipped: [] });
+  // recordFrame del piano = relativo all'inizio sequenza: il bridge aggiunge l'inizio della timeline (90000)
+  assert.deepEqual(r, { ok: true, timelineName: 'Regia', itemsAdded: 2, tracksCreated: 1, markersAdded: 0, baseFrame: 90000, skipped: [] });
   assert.equal(f.res.timelines[0].tracks.video, 2);
   assert.deepEqual(f.res.appended.flat(), [
-    { id: 'a', startFrame: 0, endFrame: 50, trackIndex: 1, recordFrame: 1000, mediaType: 1 },
-    { id: 'b', startFrame: 10, endFrame: 60, trackIndex: 2, recordFrame: 1000, mediaType: 1 },
-    { id: 'a', startFrame: 0, endFrame: 50, trackIndex: 1, recordFrame: 1000, mediaType: 2 },
+    { id: 'a', startFrame: 0, endFrame: 50, trackIndex: 1, recordFrame: 91000 }, // video+audio collegati (senza mediaType)
+    { id: 'b', startFrame: 10, endFrame: 60, trackIndex: 2, recordFrame: 91000, mediaType: 1 },
   ]);
+  const items = f.res.timelines[0].items.map((i) => [i.type, i.track, i.start]);
+  assert.deepEqual(items, [['video', 1, 91000], ['audio', 1, 91000], ['video', 2, 91000]]);
 });
 
 test('executeAppendPlan: riusa la timeline esistente e withAudio:false scarta l\'audio', async () => {
