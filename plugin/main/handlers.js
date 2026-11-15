@@ -114,11 +114,15 @@ function createHandlers(deps) {
   };
 
   // Se in Resolve e' stato aperto un altro progetto, salva quello vecchio e carica il sidecar del nuovo.
-  h.checkProject = () => serial(async () => {
-    const env = await bridge.getEnv();
+  h.checkProject = async () => {
+    const env = await bridge.getEnv(); // fuori dalla coda: se Resolve e' occupato non blocca le modifiche
     if (env.timelineFps) state.meta.timelineFps = env.timelineFps;
     const key = `${env.projectName}|${env.projectId ?? ''}`;
     if (!env.projectName || state.meta.projectKey === key) return { changed: false, env };
+    return serial(() => switchProject(env, key));
+  };
+  async function switchProject(env, key) {
+    if (state.meta.projectKey === key) return { changed: false, env };
     const first = state.meta.projectKey === null;
     if (!first) await autosave();
     state.meta.projectKey = key;
@@ -136,7 +140,7 @@ function createHandlers(deps) {
     }
     notify(state.snapshot());
     return { changed: !first, loaded, env };
-  });
+  }
 
   // ----- script
   h.pickScriptFile = async () => (pickFile ? pickFile() : null);

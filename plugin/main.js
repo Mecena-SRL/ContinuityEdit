@@ -53,6 +53,9 @@ async function getResolve() {
   try {
     WorkflowIntegration.RegisterCallback?.('ResolveQuit', () => app.quit());
   } catch { /* callback facoltativa */ }
+  // Di default le chiamate alla API non scadono mai: con Resolve bloccato da una finestra modale il pannello
+  // resterebbe appeso. 30 s bastano per le operazioni piu' lente (creazione timeline, append).
+  try { WorkflowIntegration.SetAPITimeout?.(30); } catch { /* versioni senza SetAPITimeout */ }
   return resolveObj;
 }
 
@@ -123,7 +126,11 @@ function createWindow() {
   mainWindow = new BrowserWindow({
     width: 1280,
     height: 820,
+    minWidth: 800,
+    minHeight: 600,
     useContentSize: true,
+    title: 'ContinuityEdit',
+    backgroundColor: '#15171b',
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       sandbox: true,
@@ -132,11 +139,8 @@ function createWindow() {
     },
   });
   mainWindow.on('close', () => app.quit());
+  // Il renderer, all'avvio, chiama checkProject(): aggancia il progetto Resolve aperto e ricarica il suo sidecar.
   mainWindow.loadFile(path.join(__dirname, 'index.html'));
-  // Ripristina automaticamente il sidecar del progetto Resolve corrente (se c'e' gia' uno script salvato).
-  mainWindow.webContents.once('did-finish-load', () => {
-    handlers?.loadProject().catch(() => { /* nessun sidecar o non leggibile: si parte da zero */ });
-  });
 }
 
 app.whenReady().then(async () => {

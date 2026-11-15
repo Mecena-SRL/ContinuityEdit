@@ -13,6 +13,12 @@ Ogni chiamata incerta passa da `attempt()` nel bridge (`core/src/bridge/resolveB
 `{ok:false, reason}` e la UI mostra un messaggio in italiano con un rimedio. **Diagnostica** (menu ⋯ > Diagnostica)
 prova tutte le firme qui sotto e salva `~/Desktop/continuityedit_diag.json`: è il file da mandare dopo il collaudo.
 
+## Connessione
+
+`WorkflowIntegration.Initialize(id)`, `GetResolve()` (V, README). Il main imposta `SetAPITimeout(30)` (dal README:
+di default le chiamate non scadono mai, e con una finestra modale aperta in Resolve il pannello resterebbe appeso).
+Le letture periodiche (cambio progetto, uso in timeline, playhead) stanno fuori dalla coda delle modifiche.
+
 ## Lettura del Media Pool e delle clip
 
 | Uso | Chiamata | Stato | Ripiego |
