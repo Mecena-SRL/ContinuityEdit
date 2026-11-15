@@ -2,11 +2,11 @@
 
 Plugin per **DaVinci Resolve Studio** (macOS) in stile ScriptSync di Avid: importa la sceneggiatura (FDX/PDF), la allinea alle trascrizioni delle clip e mostra, riga per riga, quali take la coprono.
 
-**Stato: v0.0.1** — prima versione, installer non firmato. Vedi `CHANGELOG.md`.
+**Stato: v0.1.0** — lettore integrato, mini-montaggio, assistente passo-passo, ricerca nel parlato, revisioni dello script. Installer non firmato. Vedi `CHANGELOG.md`.
 
 ## Installazione
 
-Dal `.dmg` (release): apri `ContinuityEdit-0.0.1.dmg`, tasto destro > Apri su *Installa ContinuityEdit*, poi riavvia Resolve. Dettagli, quarantena e risoluzione problemi in [`docs/GUIDA_UTENTE.md`](docs/GUIDA_UTENTE.md).
+Dal pacchetto ZIP (release): doppio click su *Installa ContinuityEdit.command* (tasto destro > Apri se macOS lo blocca), poi apri Resolve. Dettagli, quarantena e risoluzione problemi in [`docs/GUIDA_UTENTE.md`](docs/GUIDA_UTENTE.md).
 
 Dal sorgente (macOS, Resolve Studio installato): `scripts/install-mac.sh` (`--uninstall` per rimuovere). Per creare il .dmg: `scripts/make-icns.sh` poi `scripts/build-dmg.sh`.
 
@@ -18,7 +18,11 @@ Dal sorgente (macOS, Resolve Studio installato): `scripts/install-mac.sh` (`--un
 npm ci
 npm test
 node scripts/build-plugin.mjs   # assembla dist/com.continuityedit.plugin
+bash plugin/dev/make-samples.sh # video sintetici per l'harness (ffmpeg)
+node plugin/dev/serve.mjs       # harness: http://127.0.0.1:8799/plugin/dev/index.html?seed=1
 ```
+
+L'harness usa i veri handler del plugin con un finto Resolve. Cosa della API di Resolve è verificato e cosa è ipotesi: [`docs/RESOLVE_API_NOTES.md`](docs/RESOLVE_API_NOTES.md).
 
 Struttura:
 
