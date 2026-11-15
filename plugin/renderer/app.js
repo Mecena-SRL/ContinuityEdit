@@ -36,7 +36,7 @@ const S = {
   importInfo: null, showImport: false,
   busy: new Set(),
   usage: { ok: false, usedLines: {}, usedTakes: {} }, follow: false, tlLine: null,
-  skipped: new Set(), sent: false, syncAll: null,
+  skipped: new Set(), sent: false, syncAll: null, aligned: new Set(),
   d: {},
 };
 
@@ -48,7 +48,8 @@ const sentKey = () => `ce.sent.${S.env?.projectName || 'progetto'}`;
 function toast(msg, kind = 'info', ms = 4500) {
   const host = document.getElementById('toasts');
   if (!host) return;
-  const el = h('div', { class: `toast toast-${kind}`, role: kind === 'error' ? 'alert' : 'status' },
+  for (const t of [...host.children]) if (t.dataset.msg === msg) t.remove(); // niente doppioni
+  const el = h('div', { class: `toast toast-${kind}`, role: kind === 'error' ? 'alert' : 'status', 'data-msg': msg },
     h('span', {}, msg),
     h('button', { class: 'icon-btn', type: 'button', 'aria-label': 'Chiudi messaggio', onclick: () => el.remove() }, '×'));
   host.append(el);
@@ -80,7 +81,7 @@ function derive() {
   const cutMap = new Map();
   for (const it of sitems) if (it.role === 'cutaway' && it.fromLineId) cutawayLineIds(view.lines, it).forEach((id) => cutMap.set(`${it.takeId}|${id}`, it));
   const seq = { items: sitems, master: masterTakeId(sitems), cutMap, any: sitems.length > 0, layout: view.sequence };
-  const summary = summarize({ view, project, clips: S.clips, transcribing: S.transcribing, sent: S.sent });
+  const summary = summarize({ view, project, clips: S.clips, transcribing: S.transcribing, sent: S.sent, aligned: S.aligned });
   const step = nextStep(summary, { skipped: S.skipped });
   S.d = { seq, byId, visible, unc, layout, plan, allTakes, takes: plan.ordered, matches: searchMatches(view.lines, S.query), summary, step };
 }
@@ -253,7 +254,8 @@ const ctx = {
     toast(`Montaggio grezzo: ${r.itemCount} ${r.itemCount === 1 ? 'pezzo' : 'pezzi'} su V1${r.skipped.length ? `, ${r.skipped.length} righe senza take` : ''}. Tasto destro su una riga per mettere un'altra camera su V2.`, 'ok', 8000);
   },
   async sendTimeline(mode = 'new') {
-    const name = `${S.env?.timelineName && mode === 'append' ? S.env.timelineName : `ContinuityEdit ${new Date().toLocaleDateString('it-IT')}`}`;
+    const d = new Date(); const z = (n) => String(n).padStart(2, '0');
+    const name = mode === 'append' && S.env?.timelineName ? S.env.timelineName : `ContinuityEdit ${d.getFullYear()}-${z(d.getMonth() + 1)}-${z(d.getDate())}`;
     const r = await run('Invio in timeline', () => ce.sequence.assemble({ timelineName: name, withAudio: true, mode, lineMarkers: true }));
     if (!r) return null;
     if (r.ok) {

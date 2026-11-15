@@ -389,6 +389,16 @@ textarea.input { width: 100%; resize: vertical; }
 .ed-toggle:hover { background: var(--bg-4); }
 .ed-tools { display: flex; align-items: center; gap: 4px; flex: 1 1 auto; min-width: 0; flex-wrap: wrap; }
 .ed-time { font-size: 12px; min-width: 86px; color: var(--fg-2); }
+.ed-zoom { display: inline-flex; align-items: center; gap: 4px; }
+@media (max-width: 1000px) {
+  .ed-bar, .ed-tools { flex-wrap: nowrap; }
+  .ed-toggle .dim, .ed-zoom .chk { display: none; }
+  .bar-row .select { max-width: 170px; }
+  .side .btn-icon { padding: 4px 5px; }
+  .pl-sep { margin: 0 1px; }
+}
+@media (max-width: 860px) { .ed-zoom { display: none; } .ed-time { min-width: 0; } }
+@media (max-height: 700px) { .pl-screen { max-height: 27vh; } .header { min-height: 48px; padding-top: 5px; padding-bottom: 5px; } .script-bar { padding: 5px 8px; gap: 4px; } }
 .ed-body { display: flex; min-width: 0; border-top: 1px solid var(--line); }
 .ed-heads { flex: none; background: var(--bg-2); border-right: 1px solid var(--line); }
 .ed-rh { height: 22px; border-bottom: 1px solid var(--line); }
@@ -425,7 +435,7 @@ textarea.input { width: 100%; resize: vertical; }
 .toasts { position: fixed; left: 50%; transform: translateX(-50%); bottom: 34px; display: grid; gap: 6px; z-index: 90; width: min(600px, calc(100vw - 24px)); pointer-events: none; }
 .toast { pointer-events: auto; display: flex; justify-content: space-between; align-items: center; gap: 10px; background: var(--bg-4); border: 1px solid var(--line-2); border-left: 4px solid var(--accent); border-radius: var(--radius); padding: 8px 12px; box-shadow: var(--shadow); animation: pop .15s ease-out; }
 .toast-ok { border-left-color: var(--ok); } .toast-warn { border-left-color: var(--warn); } .toast-error { border-left-color: var(--bad); }
-.sync-card { position: fixed; right: 14px; bottom: 36px; z-index: 85; width: min(360px, calc(100vw - 28px)); background: var(--bg-3); border: 1px solid var(--line-2); border-radius: 10px; box-shadow: var(--shadow); padding: 10px 12px; display: grid; gap: 8px; animation: pop .15s ease-out; }
+.sync-card { position: fixed; right: 14px; top: 64px; z-index: 85; width: min(360px, calc(100vw - 28px)); background: var(--bg-3); border: 1px solid var(--line-2); border-radius: 10px; box-shadow: var(--shadow); padding: 10px 12px; display: grid; gap: 8px; animation: pop .15s ease-out; }
 .sync-head { display: flex; align-items: center; gap: 8px; } .sync-head b { flex: 1; }
 .sync-phase { font-size: 12.5px; color: var(--fg-2); }
 .progress { height: 6px; background: var(--bg-5); border-radius: 3px; overflow: hidden; }

@@ -646,10 +646,10 @@ export function createBridge(resolveOrGetter, { lazy = false, fileExists = null,
    * Esegue il piano di montaggio. I `recordFrame` del piano sono RELATIVI all'inizio della sequenza: il bridge aggiunge
    * l'inizio della timeline (mode 'new', o timeline esistente per nome) oppure la fine del contenuto (mode 'append').
    * @param {{clipId,startFrame,endFrame,trackIndex?,recordFrame?,mediaType?}[]} plan  fine esclusa; mediaType 1=video 2=audio
-   * @param {{timelineName?, withAudio?, mode?:'new'|'append', markers?:[{recordFrame,name,note,color,customData}]}} opts
+   * @param {{timelineName?, withAudio?, mode?:'auto'|'new'|'append', markers?:[{recordFrame,name,note,color,customData}]}} opts
    * @returns {{ok, timelineName, itemsAdded, tracksCreated, markersAdded, baseFrame, skipped:[{clipId,reason}], reason?}}
    */
-  async function executeAppendPlan(plan, { timelineName, withAudio = true, mode = 'new', markers = [] } = {}) {
+  async function executeAppendPlan(plan, { timelineName, withAudio = true, mode = 'auto', markers = [] } = {}) {
     const skipped = [];
     const base = { timelineName: null, itemsAdded: 0, tracksCreated: 0, markersAdded: 0, skipped };
     if (!Array.isArray(plan) || plan.length === 0) return { ok: false, ...base, reason: 'piano di montaggio vuoto' };
@@ -674,7 +674,7 @@ export function createBridge(resolveOrGetter, { lazy = false, fileExists = null,
       tl = await project.GetCurrentTimeline();
       if (!tl) return { ok: false, ...base, reason: 'nessuna timeline aperta in Resolve a cui accodare' };
       name = (await attempt(() => tl.GetName(), 'GetName')).value ?? name;
-    } else if (name) {
+    } else if (name && mode !== 'new') { // 'auto': una timeline con quel nome si riusa (in coda); 'new': sempre nuova
       tl = await findTimelineByName(project, name);
       if (tl) {
         const r = await makeCurrent(tl);

@@ -724,7 +724,7 @@ function createHandlers(deps) {
 
   // Manda la sequenza in Resolve. mode 'new' = timeline nuova; 'append' = in coda alla timeline aperta.
   // lineMarkers: marker blu sulla timeline all'inizio di ogni riga dello script (customData 'ce:line:<id>').
-  h['sequence.assemble'] = async ({ plan, timelineName, withAudio = true, mode = 'new', lineMarkers = true } = {}) => {
+  h['sequence.assemble'] = async ({ plan, timelineName, withAudio = true, mode = 'auto', lineMarkers = true } = {}) => {
     const p = state.project;
     let steps = plan;
     const extraSkipped = [];

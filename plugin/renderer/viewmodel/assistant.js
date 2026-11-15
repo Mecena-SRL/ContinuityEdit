@@ -5,7 +5,8 @@
 
 export const PHASES = ['Clip', 'Copione', 'Sincronizza', 'Montaggio', 'Timeline'];
 
-export function summarize({ view, project, clips = {}, transcribing = new Set(), sent = false }) {
+// aligned: take gia' passati dall'allineamento automatico (anche senza risultati: clip mute) -> non si ripropone.
+export function summarize({ view, project, clips = {}, transcribing = new Set(), sent = false, aligned = new Set() }) {
   const takes = view?.takes || [];
   const lines = view?.lines || [];
   const cov = view?.coverage || {};
@@ -15,7 +16,7 @@ export function summarize({ view, project, clips = {}, transcribing = new Set(),
   const known = (t) => clips[t.clipId] !== undefined;
   const isTr = (t) => !!clips[t.clipId]?.transcribed;
   const untranscribed = takes.filter((t) => known(t) && !isTr(t) && !transcribing.has(t.clipId)).map((t) => t.id);
-  const unsynced = takes.filter((t) => isTr(t) && !(cov[t.id] || []).length).map((t) => t.id);
+  const unsynced = takes.filter((t) => isTr(t) && !(cov[t.id] || []).length && !aligned.has(t.id)).map((t) => t.id);
   const uncovered = syncable.filter((l) => !covered.has(l.id));
   return {
     takes: takes.length,
@@ -45,6 +46,11 @@ export function nextStep(s, { skipped = new Set() } = {}) {
     return step('script', 1, 'Importa la sceneggiatura',
       'Final Draft (.fdx) o PDF. Documentario o niente copione? Le trascrizioni possono diventare il copione.',
       { id: 'importScript', label: 'Importa sceneggiatura…' }, { id: 'docMode', label: 'Usa le trascrizioni' });
+  }
+  if (s.seqItems && s.sent) {
+    return step('done', 4, 'Fatto: la timeline è in Resolve',
+      'Le righe montate hanno il pallino verde. Con "Segui timeline" lo script segue il playhead di Resolve e un clic su una riga lo sposta.',
+      { id: 'followTimeline', label: 'Segui la timeline' }, { id: 'sendTimeline', label: 'Manda di nuovo' });
   }
   if (s.transcribing) {
     return step('transcribe', 2, 'Trascrizione in corso',

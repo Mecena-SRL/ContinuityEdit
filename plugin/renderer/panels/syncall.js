@@ -50,6 +50,7 @@ export async function runSyncAll(ctx, { alignAfter = true } = {}) {
         if (job.cancelled) break;
         job.phase = `Allineo “${ctx.takeLabel(t.id)}” allo script (${job.done + 1} di ${takes.length})`; upd();
         try { const r = await ce.autoSync(t.id); lines += Math.round((r.added || 0) / 2); } catch (e) { job.errors.push(`${ctx.takeLabel(t.id)}: ${cleanError(e)}`); }
+        S.aligned.add(t.id);
         job.done++;
       }
       job.result = `${lines} righe agganciate in ${takes.length} ${takes.length === 1 ? 'take' : 'take'}.`;

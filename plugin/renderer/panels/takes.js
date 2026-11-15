@@ -108,7 +108,7 @@ function takeCard(ctx, t, st, { remove, adv }) {
     h('span', { class: 'take-dot', 'aria-hidden': 'true' }),
     h('b', { class: 'take-name', title: t.name }, ctx.takeLabel(t.id)),
     isMaster ? h('span', { class: 'chip chip-master', title: 'Master del montaggio (V1)' }, 'V1') : null,
-    used ? h('span', { class: 'chip chip-used', title: 'Usato nella timeline corrente di Resolve' }, ico('timeline', 'ico ico-xs'), ' in timeline') : null,
+    used ? h('span', { class: 'chip chip-used', title: 'Usato nella timeline corrente di Resolve' }, ico('timeline', 'ico ico-xs')) : null,
     h('button', { class: 'icon-btn take-play', type: 'button', title: 'Apri nel lettore', 'aria-label': `Apri ${ctx.takeLabel(t.id)} nel lettore`, onclick: () => { ctx.setActiveTake(t.id); ctx.player?.load(t.id, { play: true }); } }, ico('play'))),
   h('div', { class: 'take-meta dim' },
     tk.shot ? h('span', { class: `chip shot-chip st-${tk.shotSource === 'metadati' ? 'proposta' : 'confermato'}`, title: `${shotLabel(tk.shot)}${tk.shotSource ? ` (${tk.shotSource})` : ''}` }, shotAbbr(tk.shot)) : null,
