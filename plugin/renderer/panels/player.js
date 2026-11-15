@@ -41,6 +41,12 @@ export function createPlayer(root, ctx) {
     P.err = null; msg.classList.remove('on');
     const f = P.pending ?? P.frame; P.pending = null;
     seekFrame(f);
+    // Contenitore leggibile ma video non decodificabile (es. ProRes in .mov): Chromium suona solo l'audio.
+    if (!vA.videoWidth) {
+      const m = P.media.get(P.takeId);
+      if (m && m.ok && !m.triedProxy && m.proxyUrl) { m.triedProxy = true; setSource(vA, P.takeId); return; }
+      showError(`Solo audio: ${mediaErrorText({ codec: m?.codec, hasProxy: !!m?.proxyUrl, triedProxy: !!m?.triedProxy }).replace(/^Il pannello non riproduce questo formato/, 'il video di questa clip non si decodifica nel pannello')}`, true, true);
+    }
   });
   vA.addEventListener('ended', () => { if (P.mode === 'take') pause(); });
   vB.addEventListener('error', () => { if (P.mode === 'seq') badge.textContent = 'cutaway non riproducibile'; });
@@ -79,11 +85,13 @@ export function createPlayer(root, ctx) {
     if (m) { m.failed = true; showError(mediaErrorText({ codec: m.codec, hasProxy: !!m.proxyUrl, triedProxy: m.triedProxy })); }
     pause();
   }
-  function showError(text, sticky = true) {
+  // audioOnly: il messaggio resta sopra un'immagine nera ma l'audio suona (si puo' sincronizzare a orecchio).
+  function showError(text, sticky = true, audioOnly = false) {
     P.err = sticky ? text : null;
-    renderInto(msg, () => (text ? [h('p', {}, ico('warn'), ' ', text),
+    renderInto(msg, () => (text ? [h('p', {}, ico(audioOnly ? 'wave' : 'warn'), ' ', text),
       sticky && P.takeId ? h('button', { class: 'btn btn-small', type: 'button', onclick: (e) => { e.stopPropagation(); reveal(); } }, ico('resolve'), ' Mostra in Resolve') : null] : []));
     msg.classList.toggle('on', !!text);
+    msg.classList.toggle('soft', audioOnly);
   }
 
   // ---- trasporto

@@ -30,8 +30,9 @@ export const SHORTCUTS = [
     ['S', 'Still sulla lavagna'],
   ]],
   ['Sceneggiatura', [
-    ['↑ ↓', 'Riga precedente / successiva (Maiusc: estende la selezione)'], ['Invio', 'Riproduci la riga nel lettore'], ['1 … 9', 'Usa quel take per la riga'],
-    ['Ctrl/Cmd+F', 'Cerca'], ['Alt+A / D / C / P / S / T', 'Segna come azione, battuta, personaggio, parentetica, scena, transizione'],
+    ['↑  ↓', 'Riga precedente / successiva (Maiusc: estende la selezione)'], ['Invio', 'Riproduci la riga nel lettore (anche doppio clic)'], ['1 … 9', 'Usa quel take per la riga'],
+    ['Ctrl/Cmd+F', 'Cerca nello script'], ['[  ]', 'Fine del cutaway selezionato ±1 frame (Alt: inizio, Maiusc: 5)'],
+    ['Alt+A  Alt+D  Alt+P', 'Segna come azione, dialogo, personaggio'], ['Alt+S  Alt+E  Alt+T', 'Segna come scena, parentetica, transizione'],
   ]],
   ['Montaggio', [
     ['B', 'Lama al playhead'], ['Canc', 'Togli il pezzo (V1 si ricompatta)'], ['Q  W', 'Accorcia inizio / fine del pezzo fino al playhead'],
