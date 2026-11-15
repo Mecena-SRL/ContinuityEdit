@@ -35,10 +35,17 @@ function createState(sync, sequence = null) {
       groupId: t.groupId ?? null, angle: t.angle ?? null, rating: t.rating ?? null, grade: t.grade ?? '',
       tags: t.tags ?? [], bin: t.bin ?? null, shot: t.shot ?? null, shotSource: t.shotSource ?? null,
     }));
+    // copertura calcolata UNA volta per take; il take migliore per riga si sceglie su queste (progetti grandi)
     const coverage = {};
-    for (const t of p.takes) coverage[t.id] = sync.coverageForTake(p, t.id);
+    const byLine = new Map();
+    for (const t of p.takes) {
+      coverage[t.id] = sync.coverageForTake(p, t.id);
+      for (const c of coverage[t.id]) { if (!byLine.has(c.lineId)) byLine.set(c.lineId, []); byLine.get(c.lineId).push(c); }
+    }
     const bestTake = {};
-    for (const l of sync.syncableLines(p)) bestTake[l.id] = sync.bestTake(p, l.id);
+    for (const l of sync.syncableLines(p)) {
+      bestTake[l.id] = sync.pickBest ? (sync.pickBest(p, l.id, byLine.get(l.id) || [])?.take.id ?? null) : sync.bestTake(p, l.id);
+    }
     const warnings = [
       ...st.scriptWarnings.map((message) => ({ type: 'script', message })),
       ...sync.checkAnchors(p),

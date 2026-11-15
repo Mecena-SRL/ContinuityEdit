@@ -471,10 +471,12 @@ function createHandlers(deps) {
     if (p) {
       const byClip = new Map();
       for (const t of p.takes) { if (!byClip.has(t.clipId)) byClip.set(t.clipId, []); byClip.get(t.clipId).push(t); }
+      const covCache = new Map();
+      const covOf = (id) => { if (!covCache.has(id)) covCache.set(id, sync.coverageForTake(p, id)); return covCache.get(id); };
       for (const it of u.items) {
         for (const t of byClip.get(it.clipId) || []) {
           usedTakes[t.id] = (usedTakes[t.id] || 0) + 1;
-          for (const c of sync.coverageForTake(p, t.id)) {
+          for (const c of covOf(t.id)) {
             const overlap = Math.min(c.endFrame, it.srcEnd) - Math.max(c.startFrame, it.srcStart);
             if (overlap > 0 && overlap >= Math.min(12, (c.endFrame - c.startFrame) / 2)) {
               (usedLines[c.lineId] ||= []);

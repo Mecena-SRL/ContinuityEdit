@@ -7,7 +7,7 @@ export {
   addAnchor, moveAnchor, removeAnchor, anchorsForTake, effectiveAnchors, checkAnchors, fromAlignment,
 } from './anchors.js';
 export { coverageForTake, coverageForLine } from './coverage.js';
-export { framesForLine, lineAtFrame, takesForLine, bestTake, bestCoverage } from './query.js';
+export { framesForLine, lineAtFrame, takesForLine, bestTake, bestCoverage, pickBest } from './query.js';
 export { planAssembly, planAssemblyDetailed } from './assembly.js';
 export { createHistory, HISTORY_LIMIT } from './history.js';
 export { detectGroupsByCoverage, suggestMaster, suggestMasterAmong, suggestShotFromMetadata, suggestGroupShots, mergeGroupProposals } from './groups.js';

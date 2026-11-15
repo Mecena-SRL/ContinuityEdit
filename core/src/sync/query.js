@@ -47,8 +47,13 @@ function cmp(a, b, project) {
 // poi la copertura piu' completa (non stimata > 2 estremi espliciti > ratio piu' alto > manuale), a parita' il primo take.
 // Ritorna {take, coverage}|null. `coverage` puo' essere null se la selezione non copre la riga.
 export function bestCoverage(project, lineId, opts) {
+  return pickBest(project, lineId, framesForLine(project, lineId, opts));
+}
+
+// Stessa scelta di bestCoverage ma su coperture gia' calcolate (`all` = coperture della riga in tutti i take, in
+// ordine di take): evita di ricalcolare la copertura di ogni take per ogni riga (vista dello stato, progetti grandi).
+export function pickBest(project, lineId, all) {
   const sel = project.selection?.[lineId];
-  const all = framesForLine(project, lineId, opts);
   if (sel && getTake(project, sel)) {
     return { take: getTake(project, sel), coverage: all.find((c) => c.takeId === sel) || null };
   }
